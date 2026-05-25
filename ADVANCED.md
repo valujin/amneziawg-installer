@@ -382,7 +382,7 @@ PersistentKeepalive = 33
   --subnet=ПОДСЕТЬ      Установить подсеть туннеля (x.x.x.x/yy)
   --allow-ipv6          Оставить IPv6 включенным
   --disallow-ipv6       Принудительно отключить IPv6
-  --route-all           Режим: Весь трафик (0.0.0.0/0)
+  --route-all           Режим: Весь трафик (0.0.0.0/0, ::/0)
   --route-amnezia       Режим: Список Amnezia+DNS (умолч.)
   --route-custom=СЕТИ   Режим: Только указанные сети
   --endpoint=IP         Указать внешний IP (для серверов за NAT)
@@ -532,7 +532,7 @@ graph TD
 Инсталлятор скачивает `awg_common.sh` и `manage_amneziawg.sh` с URL, привязанных к конкретному тегу версии:
 
 ```
-https://raw.githubusercontent.com/bivlked/amneziawg-installer/v5.11.1/awg_common.sh
+https://raw.githubusercontent.com/valujin/amneziawg-installer/v5.11.1/awg_common.sh
 ```
 
 Это даёт **supply chain pinning**: скачиваемые скрипты соответствуют версии инсталлятора, даже если `main` уже обновлён.
@@ -552,12 +552,12 @@ AWG_BRANCH=my-feature-branch sudo bash ./install_amneziawg.sh
 
 ```bash
 # Русская версия:
-wget -O /root/awg/manage_amneziawg.sh https://raw.githubusercontent.com/bivlked/amneziawg-installer/v5.11.1/manage_amneziawg.sh
-wget -O /root/awg/awg_common.sh https://raw.githubusercontent.com/bivlked/amneziawg-installer/v5.11.1/awg_common.sh
+wget -O /root/awg/manage_amneziawg.sh https://raw.githubusercontent.com/valujin/amneziawg-installer/v5.11.1/manage_amneziawg.sh
+wget -O /root/awg/awg_common.sh https://raw.githubusercontent.com/valujin/amneziawg-installer/v5.11.1/awg_common.sh
 
 # Английская версия:
-wget -O /root/awg/manage_amneziawg.sh https://raw.githubusercontent.com/bivlked/amneziawg-installer/v5.11.1/manage_amneziawg_en.sh
-wget -O /root/awg/awg_common.sh https://raw.githubusercontent.com/bivlked/amneziawg-installer/v5.11.1/awg_common_en.sh
+wget -O /root/awg/manage_amneziawg.sh https://raw.githubusercontent.com/valujin/amneziawg-installer/v5.11.1/manage_amneziawg_en.sh
+wget -O /root/awg/awg_common.sh https://raw.githubusercontent.com/valujin/amneziawg-installer/v5.11.1/awg_common_en.sh
 
 # Установить права
 chmod 700 /root/awg/manage_amneziawg.sh /root/awg/awg_common.sh
@@ -705,7 +705,7 @@ sudo systemctl restart awg-quick@awg0</pre>
   <tr><td>Megafon (регионы)</td><td><b>I1=отсутствует</b></td><td><code>--preset=mobile</code> + удалить <code>I1</code></td><td>✅</td></tr>
   </table>
   <br>
-  <b>«I1=отсутствует»</b> означает: в <code>/etc/amnezia/amneziawg/awg0.conf</code> и в клиентских <code>.conf</code> удалить строку <code>I1 = ...</code> целиком (не оставлять пустую). Это AWG 1.0 fallback — без CPS-маскировки, но handshake проходит DPI у некоторых региональных операторов, где CPS-пакеты сами триггерят блок (Issue <a href="https://github.com/bivlked/amneziawg-installer/issues/42">#42</a>, @alkorrnd). После правки на сервере: <code>sudo systemctl restart awg-quick@awg0</code>. На клиентах — <code>sudo bash /root/awg/manage_amneziawg.sh regen &lt;имя&gt;</code> для каждого, и раздать новые конфиги.
+  <b>«I1=отсутствует»</b> означает: в <code>/etc/amnezia/amneziawg/awg0.conf</code> и в клиентских <code>.conf</code> удалить строку <code>I1 = ...</code> целиком (не оставлять пустую). Это AWG 1.0 fallback — без CPS-маскировки, но handshake проходит DPI у некоторых региональных операторов, где CPS-пакеты сами триггерят блок (Issue <a href="https://github.com/valujin/amneziawg-installer/issues/42">#42</a>, @alkorrnd). После правки на сервере: <code>sudo systemctl restart awg-quick@awg0</code>. На клиентах — <code>sudo bash /root/awg/manage_amneziawg.sh regen &lt;имя&gt;</code> для каждого, и раздать новые конфиги.
 </details>
 
 <details>
@@ -746,7 +746,7 @@ sudo ufw reload</pre>
   <br><br>
   <b>Если ты вручную правил <code>AllowedIPs</code> на клиенте под split tunneling</b> (через VPN идут только нужные подсети — например, только Telegram/Discord, а остальной трафик мимо), убедись что в списке есть <b>подсеть туннеля</b> (<code>10.9.9.0/24</code> или твоя кастомная). Без неё клиент не маршрутизирует в туннель даже пакеты к самому серверу — <code>ufw status verbose</code> и <code>iptables -L ufw-before-input -v -n</code> могут выглядеть правильно, а ping всё равно не идёт. Покрытие зависит от выбранного режима: <code>--route-all</code> (полный туннель <code>0.0.0.0/0</code>) включает подсеть туннеля автоматически; дефолтный <code>--route-amnezia</code> (Amnezia List, исключает <code>10.0.0.0/8</code>) и <code>--route-custom=</code> - нет, добавляй вручную.
   <br><br>
-  <b>Если нужен пинг между клиентами</b> (телефон ↔ роутер через сервер): <code>sudo ufw route allow in on awg0 out on awg0 &amp;&amp; sudo ufw reload</code>. <code>AllowedIPs</code> в клиентских <code>.conf</code> зависит от режима, выбранного при установке (см. абзац выше). Discussion <a href="https://github.com/bivlked/amneziawg-installer/discussions/63">#63</a>.
+  <b>Если нужен пинг между клиентами</b> (телефон ↔ роутер через сервер): <code>sudo ufw route allow in on awg0 out on awg0 &amp;&amp; sudo ufw reload</code>. <code>AllowedIPs</code> в клиентских <code>.conf</code> зависит от режима, выбранного при установке (см. абзац выше). Discussion <a href="https://github.com/valujin/amneziawg-installer/discussions/63">#63</a>.
 </details>
 
 <details>
@@ -776,7 +776,7 @@ sudo ufw reload</pre>
 
 <details>
   <summary><strong>В: Клиент <code>amneziawg-windows-client</code> подчёркивает H2-H4 красным и не даёт редактировать конфиг</strong></summary>
-  <b>О:</b> Это upstream-баг в standalone Windows-клиенте <code>amneziawg-windows-client</code> (форк wireguard-windows с AWG-патчами). Его встроенный редактор конфигов в <code>ui/syntax/highlighter.go</code> ограничивает H1-H4 диапазоном [0, 2147483647] (это 2^31-1, <code>INT32_MAX</code>), хотя спецификация AmneziaWG допускает полный <code>uint32</code> (0-4294967295). Значения выше 2^31-1 на сервере работают нормально, но клиент подчёркивает их красным и может блокировать сохранение правок. Upstream issue: <a href="https://github.com/amnezia-vpn/amneziawg-windows-client/issues/85">amnezia-vpn/amneziawg-windows-client#85</a> (открыт с февраля 2026, не исправлен). Наш installer с v5.8.1 генерирует H1-H4 в безопасной половине диапазона [0, 2^31-1] — новые установки совместимы с Windows-клиентом из коробки. Если у тебя установка v5.8.0 с «плохими» H: (1) обнови через <code>--uninstall</code> + <code>install_amneziawg.sh</code> v5.8.1 — новые H будут в безопасном диапазоне; либо (2) поправь H2/H3/H4 в <code>awg0.conf</code> вручную на значения <b>меньше 2147483647</b>, перезапусти сервис и перегенерируй клиентские конфиги через <code>manage regen &lt;имя&gt;</code>; либо (3) используй кросс-платформенный <a href="https://github.com/amnezia-vpn/amnezia-client/releases">Amnezia VPN</a> клиент вместо <code>amneziawg-windows-client</code> — у него этого ограничения нет. Discussion: <a href="https://github.com/bivlked/amneziawg-installer/discussions/40">#40</a>.
+  <b>О:</b> Это upstream-баг в standalone Windows-клиенте <code>amneziawg-windows-client</code> (форк wireguard-windows с AWG-патчами). Его встроенный редактор конфигов в <code>ui/syntax/highlighter.go</code> ограничивает H1-H4 диапазоном [0, 2147483647] (это 2^31-1, <code>INT32_MAX</code>), хотя спецификация AmneziaWG допускает полный <code>uint32</code> (0-4294967295). Значения выше 2^31-1 на сервере работают нормально, но клиент подчёркивает их красным и может блокировать сохранение правок. Upstream issue: <a href="https://github.com/amnezia-vpn/amneziawg-windows-client/issues/85">amnezia-vpn/amneziawg-windows-client#85</a> (открыт с февраля 2026, не исправлен). Наш installer с v5.8.1 генерирует H1-H4 в безопасной половине диапазона [0, 2^31-1] — новые установки совместимы с Windows-клиентом из коробки. Если у тебя установка v5.8.0 с «плохими» H: (1) обнови через <code>--uninstall</code> + <code>install_amneziawg.sh</code> v5.8.1 — новые H будут в безопасном диапазоне; либо (2) поправь H2/H3/H4 в <code>awg0.conf</code> вручную на значения <b>меньше 2147483647</b>, перезапусти сервис и перегенерируй клиентские конфиги через <code>manage regen &lt;имя&gt;</code>; либо (3) используй кросс-платформенный <a href="https://github.com/amnezia-vpn/amnezia-client/releases">Amnezia VPN</a> клиент вместо <code>amneziawg-windows-client</code> — у него этого ограничения нет. Discussion: <a href="https://github.com/valujin/amneziawg-installer/discussions/40">#40</a>.
 </details>
 
 <details>
@@ -999,7 +999,7 @@ AWG 2.0 поддерживается не всеми клиентами. Пер�
 | [AmneziaWG for Merlin](https://github.com/r0otx/asuswrt-merlin-amneziawg) | ASUS (Asuswrt-Merlin) | Аддон AWG 2.0 с веб-интерфейсом, GeoIP/GeoSite маршрутизация |
 | [awg-proxy](https://github.com/timbrs/amneziawg-mikrotik-c) | MikroTik (RouterOS Container) | Docker-контейнер, преобразует WireGuard-трафик MikroTik в AmneziaWG |
 
-> **Keenetic нативный AWG 2.0:** Прошивки Keenetic 4.x поддерживают AWG 2.0 без дополнительных пакетов. Если туннель поднимается, но трафик не идёт — проблема в формате I1. Рабочие варианты: `I1 = <r 64>` или DNS-имитирующий паттерн `I1 = <r 2><b 0x858000010001000000000669636c6f756403636f6d0000010001c00c000100010000105a00044d583737>`. После замены I1 в серверном конфиге: `sudo systemctl restart awg-quick@awg0` + `manage regen <клиент>`. [Discussion #45](https://github.com/bivlked/amneziawg-installer/discussions/45).
+> **Keenetic нативный AWG 2.0:** Прошивки Keenetic 4.x поддерживают AWG 2.0 без дополнительных пакетов. Если туннель поднимается, но трафик не идёт — проблема в формате I1. Рабочие варианты: `I1 = <r 64>` или DNS-имитирующий паттерн `I1 = <r 2><b 0x858000010001000000000669636c6f756403636f6d0000010001c00c000100010000105a00044d583737>`. После замены I1 в серверном конфиге: `sudo systemctl restart awg-quick@awg0` + `manage regen <клиент>`. [Discussion #45](https://github.com/valujin/amneziawg-installer/discussions/45).
 
 ---
 
@@ -1049,7 +1049,7 @@ apt-get update && apt-get install -y curl
 **Как это работает:**
 
 1. Инсталлятор определяет версию ядра и архитектуру автоматически.
-2. Если в [arm-packages release](https://github.com/bivlked/amneziawg-installer/releases/tag/arm-packages) есть готовый пакет `amneziawg.ko` для вашего ядра, он скачивается и устанавливается через `dpkg`. Это занимает 2-3 минуты.
+2. Если в [arm-packages release](https://github.com/valujin/amneziawg-installer/releases/tag/arm-packages) есть готовый пакет `amneziawg.ko` для вашего ядра, он скачивается и устанавливается через `dpkg`. Это занимает 2-3 минуты.
 3. Если готовый пакет не подходит, инсталлятор переключается на DKMS-сборку из исходников. Работает с любым ядром, но занимает больше времени (10-30 мин в зависимости от оборудования).
 
 **Определение ядра Raspberry Pi:**
@@ -1200,7 +1200,7 @@ sudo systemctl status awg-quick@awg0
 
 ### Источник
 
-Рабочий минимальный рецепт для Debian 13 в привилегированном LXC на Proxmox прислал [@Akh-commits](https://github.com/Akh-commits) в [issue #51](https://github.com/bivlked/amneziawg-installer/issues/51#issuecomment-4288953829) — этот раздел построен на нём с расширением по prebuilt-варианту, security-warning и нюансам Debian 12.
+Рабочий минимальный рецепт для Debian 13 в привилегированном LXC на Proxmox прислал [@Akh-commits](https://github.com/Akh-commits) в [issue #51](https://github.com/valujin/amneziawg-installer/issues/51#issuecomment-4288953829) — этот раздел построен на нём с расширением по prebuilt-варианту, security-warning и нюансам Debian 12.
 
 ---
 
@@ -1220,7 +1220,7 @@ sudo systemctl status awg-quick@awg0
 <a id="contributing-adv"></a>
 ## 🤝 Внесение вклада (Contributing)
 
-Предложения и исправления приветствуются! Создавайте Issue или Pull Request в [репозитории](https://github.com/bivlked/amneziawg-installer).
+Предложения и исправления приветствуются! Создавайте Issue или Pull Request в [репозитории](https://github.com/valujin/amneziawg-installer).
 
 ---
 

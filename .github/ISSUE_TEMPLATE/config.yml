@@ -1,17 +1,17 @@
 blank_issues_enabled: true
 contact_links:
   - name: "FAQ & Troubleshooting"
-    url: https://github.com/bivlked/amneziawg-installer#faq-main
+    url: https://github.com/valujin/amneziawg-installer#faq-main
     about: "Прочитайте FAQ / Read the FAQ before opening an issue"
   - name: "Документация / Advanced Documentation"
-    url: https://github.com/bivlked/amneziawg-installer/blob/main/ADVANCED.md
+    url: https://github.com/valujin/amneziawg-installer/blob/main/ADVANCED.md
     about: "Подробная документация / Detailed technical documentation"
   - name: "Documentation (English)"
-    url: https://github.com/bivlked/amneziawg-installer/blob/main/README.en.md
+    url: https://github.com/valujin/amneziawg-installer/blob/main/README.en.md
     about: "English version of the project documentation"
   - name: "Обсуждения / Discussions"
-    url: https://github.com/bivlked/amneziawg-installer/discussions
+    url: https://github.com/valujin/amneziawg-installer/discussions
     about: "Задайте вопрос сообществу / Ask the community a question"
   - name: "Security / Безопасность"
-    url: https://github.com/bivlked/amneziawg-installer/security/policy
+    url: https://github.com/valujin/amneziawg-installer/security/policy
     about: "Report a security vulnerability / Сообщить об уязвимости"

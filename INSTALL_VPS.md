@@ -41,7 +41,7 @@ sudo ufw allow <your-ssh-port>/tcp
 Then:
 
 ```bash
-wget https://raw.githubusercontent.com/bivlked/amneziawg-installer/v5.14.1/install_amneziawg_en.sh
+wget https://raw.githubusercontent.com/valujin/amneziawg-installer/v5.14.1/install_amneziawg_en.sh
 chmod +x install_amneziawg_en.sh
 sudo bash ./install_amneziawg_en.sh
 ```
@@ -79,7 +79,7 @@ Verify the handshake from the server side with `sudo awg show awg0` after the cl
 Updating to a newer installer release on a server that already has v5.13.x or v5.14.x running:
 
 ```bash
-wget https://raw.githubusercontent.com/bivlked/amneziawg-installer/vX.Y.Z/install_amneziawg_en.sh
+wget https://raw.githubusercontent.com/valujin/amneziawg-installer/vX.Y.Z/install_amneziawg_en.sh
 sudo bash ./install_amneziawg_en.sh --force
 ```
 
@@ -106,9 +106,9 @@ The uninstall path is symmetric: it removes the AmneziaWG service, the kernel mo
 
 ## Where to ask
 
-- **Bug reports**: [GitHub Issues](https://github.com/bivlked/amneziawg-installer/issues).
-- **Usage questions, deployment quirks**: [GitHub Discussions](https://github.com/bivlked/amneziawg-installer/discussions).
-- **Feature requests**: vote on [Roadmap #79](https://github.com/bivlked/amneziawg-installer/issues/79) with a thumbs-up.
+- **Bug reports**: [GitHub Issues](https://github.com/valujin/amneziawg-installer/issues).
+- **Usage questions, deployment quirks**: [GitHub Discussions](https://github.com/valujin/amneziawg-installer/discussions).
+- **Feature requests**: vote on [Roadmap #79](https://github.com/valujin/amneziawg-installer/issues/79) with a thumbs-up.
 
 ## Related reading
 

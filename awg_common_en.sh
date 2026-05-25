@@ -2,10 +2,10 @@
 
 # ==============================================================================
 # Shared function library for AmneziaWG 2.0
-# Author: @bivlked
+# Author: @valujin
 # Version: 5.14.4
 # Date: 2026-05-24
-# Repository: https://github.com/bivlked/amneziawg-installer
+# Repository: https://github.com/valujin/amneziawg-installer
 # ==============================================================================
 #
 # This file contains shared functions for key generation, config rendering,
@@ -512,7 +512,7 @@ safe_load_config() {
                 OS_ID|OS_VERSION|OS_CODENAME|AWG_PORT|AWG_TUNNEL_SUBNET|\
                 DISABLE_IPV6|ALLOWED_IPS_MODE|ALLOWED_IPS|AWG_ENDPOINT|AWG_MTU|\
                 AWG_Jc|AWG_Jmin|AWG_Jmax|AWG_S1|AWG_S2|AWG_S3|AWG_S4|\
-                AWG_H1|AWG_H2|AWG_H3|AWG_H4|AWG_I1|AWG_PRESET|NO_TWEAKS|AWG_APPLY_MODE)
+                AWG_H1|AWG_H2|AWG_H3|AWG_H4|AWG_I1|AWG_I2|AWG_I3|AWG_I4|AWG_I5|AWG_PRESET|NO_TWEAKS|AWG_APPLY_MODE)
                     export "$key=$value"
                     ;;
             esac
@@ -537,7 +537,7 @@ load_awg_params_from_server_conf() {
     local _Jc="" _Jmin="" _Jmax=""
     local _S1="" _S2="" _S3="" _S4=""
     local _H1="" _H2="" _H3="" _H4=""
-    local _I1="" _Port="" _MTU=""
+    local _I1="" _I2="" _I3="" _I4="" _I5="" _Port="" _MTU=""
 
     local in_iface=0 line key value
     while IFS= read -r line || [[ -n "$line" ]]; do
@@ -564,6 +564,10 @@ load_awg_params_from_server_conf() {
                 H3)         _H3="$value" ;;
                 H4)         _H4="$value" ;;
                 I1)         _I1="$value" ;;
+                I2)         _I2="$value" ;;
+                I3)         _I3="$value" ;;
+                I4)         _I4="$value" ;;
+                I5)         _I5="$value" ;;
                 ListenPort) _Port="$value" ;;
                 MTU)        _MTU="$value" ;;
             esac
@@ -580,6 +584,10 @@ load_awg_params_from_server_conf() {
     export AWG_S1="$_S1" AWG_S2="$_S2" AWG_S3="$_S3" AWG_S4="$_S4"
     export AWG_H1="$_H1" AWG_H2="$_H2" AWG_H3="$_H3" AWG_H4="$_H4"
     [[ -n "$_I1"   ]] && export AWG_I1="$_I1"
+    [[ -n "$_I2"   ]] && export AWG_I2="$_I2"
+    [[ -n "$_I3"   ]] && export AWG_I3="$_I3"
+    [[ -n "$_I4"   ]] && export AWG_I4="$_I4"
+    [[ -n "$_I5"   ]] && export AWG_I5="$_I5"
     [[ -n "$_Port" ]] && export AWG_PORT="$_Port"
     if _validate_mtu "${_MTU:-}"; then
         export AWG_MTU="$_MTU"
@@ -626,7 +634,7 @@ load_awg_params() {
         # No fallback to init: that would create split-brain.
         # Unset I1 before parsing: I1 is optional, if absent from live conf
         # it must not leak stale value from init file.
-        unset AWG_I1
+        unset AWG_I1 AWG_I2 AWG_I3 AWG_I4 AWG_I5
         if ! load_awg_params_from_server_conf; then
             log_error "$SERVER_CONF_FILE is missing required AWG parameters"
             log_error "(Jc/Jmin/Jmax/S1-S4/H1-H4). Refusing to use stale values from"
@@ -844,6 +852,10 @@ EOF
     if [[ -n "${AWG_I1}" ]]; then
         echo "I1 = ${AWG_I1}" >> "$tmpfile"
     fi
+    if [[ -n "${AWG_I2:-}" ]]; then echo "I2 = ${AWG_I2}" >> "$tmpfile"; fi
+    if [[ -n "${AWG_I3:-}" ]]; then echo "I3 = ${AWG_I3}" >> "$tmpfile"; fi
+    if [[ -n "${AWG_I4:-}" ]]; then echo "I4 = ${AWG_I4}" >> "$tmpfile"; fi
+    if [[ -n "${AWG_I5:-}" ]]; then echo "I5 = ${AWG_I5}" >> "$tmpfile"; fi
 
     if ! mv "$tmpfile" "$SERVER_CONF_FILE"; then
         rm -f "$tmpfile"
@@ -944,6 +956,10 @@ EOF
     if [[ -n "${AWG_I1}" ]]; then
         echo "I1 = ${AWG_I1}" >> "$tmpfile"
     fi
+    if [[ -n "${AWG_I2:-}" ]]; then echo "I2 = ${AWG_I2}" >> "$tmpfile"; fi
+    if [[ -n "${AWG_I3:-}" ]]; then echo "I3 = ${AWG_I3}" >> "$tmpfile"; fi
+    if [[ -n "${AWG_I4:-}" ]]; then echo "I4 = ${AWG_I4}" >> "$tmpfile"; fi
+    if [[ -n "${AWG_I5:-}" ]]; then echo "I5 = ${AWG_I5}" >> "$tmpfile"; fi
 
     cat >> "$tmpfile" << EOF
 
@@ -1286,7 +1302,7 @@ generate_vpn_uri() {
     fi
     # tr -d ' \r' — strips spaces AND CR (on CRLF configs '.+' greedily
     # captures \r into the value, which breaks JSON.allowed_ips).
-    allowed_ips=$(grep -oP 'AllowedIPs\s*=\s*\K.+' "$conf_file" | tr -d ' \r') || allowed_ips="0.0.0.0/0"
+    allowed_ips=$(grep -oP 'AllowedIPs\s*=\s*\K.+' "$conf_file" | tr -d ' \r') || allowed_ips="0.0.0.0/0, ::/0"
 
     local vpn_uri perl_err
     perl_err=$(awg_mktemp) || perl_err="/tmp/awg_perl_err.$$"

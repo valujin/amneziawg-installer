@@ -13,7 +13,7 @@
 
 **Please do not open a public issue for security vulnerabilities.**
 
-Instead, use [GitHub Security Advisories](https://github.com/bivlked/amneziawg-installer/security/advisories/new) to report vulnerabilities privately.
+Instead, use [GitHub Security Advisories](https://github.com/valujin/amneziawg-installer/security/advisories/new) to report vulnerabilities privately.
 
 ### Response Timeline
 

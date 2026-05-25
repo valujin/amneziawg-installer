@@ -151,10 +151,10 @@ docs: update CHANGELOG for v5.5
 3. **If your PR adds or modifies a GitHub Actions workflow** (`.github/workflows/*.yml`) or a build script (`scripts/*.sh`), run the workflow on your fork and confirm it passes **before** requesting review. `arm-build.yml` supports `workflow_dispatch` for manual triggering; other workflows run automatically on push. This catches environment-specific failures that local testing cannot.
 4. Update **both** `CHANGELOG.md` and `CHANGELOG.en.md` if applicable
 4. Update `[Unreleased]` comparator link in both CHANGELOGs when bumping version
-5. Request a review from `@bivlked`
+5. Request a review from `@valujin`
 6. Address review feedback
 7. Once approved, the maintainer will merge
 
 ## Questions?
 
-Open a [discussion](https://github.com/bivlked/amneziawg-installer/discussions) or an issue if you have questions about contributing.
+Open a [discussion](https://github.com/valujin/amneziawg-installer/discussions) or an issue if you have questions about contributing.

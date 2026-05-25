@@ -20,7 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Highlights
 
-- 🔧 **Declining UFW now continues the install correctly** in `install_amneziawg.sh`. As observed by @jay0x on Ubuntu 24.04 ([#89](https://github.com/bivlked/amneziawg-installer/issues/89)): answering `N` to the interactive "Enable UFW?" prompt stopped the installer instead of continuing. Adjusted the decline handling: the UFW rules stay configured (deny incoming, SSH rate limit, VPN port allow, routing) but the firewall is not activated, the install proceeds, and a hint is logged that the server is running without a firewall, along with the command to enable it later (`sudo ufw enable`). With the `--yes` flag the behaviour is unchanged - UFW is enabled automatically. Affects only the interactive path where the user declines the firewall themselves.
+- 🔧 **Declining UFW now continues the install correctly** in `install_amneziawg.sh`. As observed by @jay0x on Ubuntu 24.04 ([#89](https://github.com/valujin/amneziawg-installer/issues/89)): answering `N` to the interactive "Enable UFW?" prompt stopped the installer instead of continuing. Adjusted the decline handling: the UFW rules stay configured (deny incoming, SSH rate limit, VPN port allow, routing) but the firewall is not activated, the install proceeds, and a hint is logged that the server is running without a firewall, along with the command to enable it later (`sudo ufw enable`). With the `--yes` flag the behaviour is unchanged - UFW is enabled automatically. Affects only the interactive path where the user declines the firewall themselves.
 
 ### Tests
 
@@ -34,7 +34,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Highlights
 
-- 🛡️ **Network stack protection in `cleanup_system`** in `install_amneziawg.sh`. Reported in [#84](https://github.com/bivlked/amneziawg-installer/issues/84) by @jay0x on a clean Ubuntu 26.04 server in VirtualBox: after the installer the server did not obtain an IP via DHCP. Root cause: an aggressive `apt-get autoremove` after `apt-get purge cloud-init` cascaded into removing `netplan-generator` as a transitive cloud-init dependency. Without `netplan-generator` the `/etc/netplan/00-installer-config.yaml` file (subiquity creates it on ISO installs) was no longer translated into `/run/systemd/network/*.network`, and `systemd-networkd` started with empty configuration. Changes in `cleanup_system()`: the `apt-get autoremove` call is dropped; before any `apt-get purge` an `apt-mark hold` is applied to critical network stack packages (`netplan.io`, `netplan-generator`, `systemd-resolved`, `netcfg`, `ifupdown`) - we first snapshot the user's existing holds via `apt-mark showhold` and only add our own hold on packages the user has not already locked (and on unhold we release strictly the ones we placed); a default-route snapshot is taken before and after cleanup - if the route is lost, the installer attempts recovery (`netplan.io` is reinstalled unconditionally, `netplan-generator` only when it is available in the archive via `apt-cache show`, so Debian 12 - which does not ship that package - does not abort the apt transaction), restart `systemd-networkd`, `netplan apply`, then a wait loop polling the route every 1-5 seconds for up to ~26 seconds; then on failure a last-ditch interface bring-up via `ip link set up`, first `networkctl renew` with a route re-check, then `dhclient -4` if needed, and only then the installer stops with a hint to restore the network from the console (`sudo dhclient -4 <iface>`) and retry the installer with `--no-tweaks`. Orphan packages now stay in the system after `purge` (~50-200 MB) - acceptable trade-off for stability; users can manually run `apt-get autoremove --no-install-recommends` after installation.
+- 🛡️ **Network stack protection in `cleanup_system`** in `install_amneziawg.sh`. Reported in [#84](https://github.com/valujin/amneziawg-installer/issues/84) by @jay0x on a clean Ubuntu 26.04 server in VirtualBox: after the installer the server did not obtain an IP via DHCP. Root cause: an aggressive `apt-get autoremove` after `apt-get purge cloud-init` cascaded into removing `netplan-generator` as a transitive cloud-init dependency. Without `netplan-generator` the `/etc/netplan/00-installer-config.yaml` file (subiquity creates it on ISO installs) was no longer translated into `/run/systemd/network/*.network`, and `systemd-networkd` started with empty configuration. Changes in `cleanup_system()`: the `apt-get autoremove` call is dropped; before any `apt-get purge` an `apt-mark hold` is applied to critical network stack packages (`netplan.io`, `netplan-generator`, `systemd-resolved`, `netcfg`, `ifupdown`) - we first snapshot the user's existing holds via `apt-mark showhold` and only add our own hold on packages the user has not already locked (and on unhold we release strictly the ones we placed); a default-route snapshot is taken before and after cleanup - if the route is lost, the installer attempts recovery (`netplan.io` is reinstalled unconditionally, `netplan-generator` only when it is available in the archive via `apt-cache show`, so Debian 12 - which does not ship that package - does not abort the apt transaction), restart `systemd-networkd`, `netplan apply`, then a wait loop polling the route every 1-5 seconds for up to ~26 seconds; then on failure a last-ditch interface bring-up via `ip link set up`, first `networkctl renew` with a route re-check, then `dhclient -4` if needed, and only then the installer stops with a hint to restore the network from the console (`sudo dhclient -4 <iface>`) and retry the installer with `--no-tweaks`. Orphan packages now stay in the system after `purge` (~50-200 MB) - acceptable trade-off for stability; users can manually run `apt-get autoremove --no-install-recommends` after installation.
 - 🪟 **Ubuntu 26.04 whitelisted in `check_os_version`**. Previously 26.04 fell into the warning branch with an interactive prompt (passed automatically with `--yes`). Now it is recognised as a supported OS alongside 24.04 / 25.10. The release is tested on 26.04 server in VirtualBox after the Issue #84 fix.
 
 ### Tests
@@ -53,7 +53,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 From v5.14.2 to v5.14.3:
 
 ```bash
-wget https://raw.githubusercontent.com/bivlked/amneziawg-installer/v5.14.3/install_amneziawg_en.sh
+wget https://raw.githubusercontent.com/valujin/amneziawg-installer/v5.14.3/install_amneziawg_en.sh
 sudo bash ./install_amneziawg_en.sh --force --yes
 ```
 
@@ -61,7 +61,7 @@ Step 5 of the installer pulls the latest `manage_amneziawg.sh` and `awg_common.s
 
 Thanks to @jay0x for the detailed repro with `dpkg`, `journalctl`, and `ls /etc/netplan/` output - the root cause would have taken longer to pin without it.
 
-[Full list of changes since v5.14.2](https://github.com/bivlked/amneziawg-installer/compare/v5.14.2...v5.14.3)
+[Full list of changes since v5.14.2](https://github.com/valujin/amneziawg-installer/compare/v5.14.2...v5.14.3)
 
 ---
 
@@ -71,7 +71,7 @@ Thanks to @jay0x for the detailed repro with `dpkg`, `journalctl`, and `ls /etc/
 
 ### Highlights
 
-- 📱 **`.vpnuri.png` QR is now scannable off a screen**. `awg_common.sh:generate_qr_vpnuri` now invokes `qrencode` with an explicit `-s 6` (the previous default was `3`). This is the real fix: at the default scale the PNG modules were too small for the iPhone camera to resolve when scanning off a computer screen, which produced error 900 ImportInvalidConfigError in AmneziaVPN on iOS for @haritos90 in issue [#72](https://github.com/bivlked/amneziawg-installer/issues/72) (Debian 12 + AmneziaVPN iOS 4.8.15.4). Increasing the module scale does not change QR data capacity - it makes each module physically larger so the camera can distinguish black/white blocks reliably. The current `qrencode` defaults are also pinned explicitly: `-l L` (lowest error-correction level) and `-m 4` (standard quiet zone) - so future default changes in `libqrencode` cannot regress this fix. Pasting the text of `.vpnuri` into the app already worked; the fix restores the primary camera-scan path.
+- 📱 **`.vpnuri.png` QR is now scannable off a screen**. `awg_common.sh:generate_qr_vpnuri` now invokes `qrencode` with an explicit `-s 6` (the previous default was `3`). This is the real fix: at the default scale the PNG modules were too small for the iPhone camera to resolve when scanning off a computer screen, which produced error 900 ImportInvalidConfigError in AmneziaVPN on iOS for @haritos90 in issue [#72](https://github.com/valujin/amneziawg-installer/issues/72) (Debian 12 + AmneziaVPN iOS 4.8.15.4). Increasing the module scale does not change QR data capacity - it makes each module physically larger so the camera can distinguish black/white blocks reliably. The current `qrencode` defaults are also pinned explicitly: `-l L` (lowest error-correction level) and `-m 4` (standard quiet zone) - so future default changes in `libqrencode` cannot regress this fix. Pasting the text of `.vpnuri` into the app already worked; the fix restores the primary camera-scan path.
 - 🛠️ **`scripts/build-arm-deb.sh`: explicit `KERNEL_VERSION` + fail on ambiguity**. The ARM .deb builder used to pick the first matching `/lib/modules/*/build` directory through a simple loop; on developer hosts with several installed kernels this could build against an unintended target. An external code review on 8 May raised the risk. Version resolution has been extracted into a `_resolve_kernel_version` helper with three paths: when `KERNEL_VERSION` is set, the helper validates `/lib/modules/$KERNEL_VERSION/build` and uses it; otherwise it counts candidates - zero is an error (unchanged), exactly one is the unambiguous choice (unchanged), two or more produce an explicit failure that lists every found version and asks the caller to set `KERNEL_VERSION`. The AmneziaWG CI matrix is unaffected because each QEMU container installs exactly one headers package; the defensive behaviour is needed when the script runs on user hosts.
 
 ### Tests
@@ -91,13 +91,13 @@ Thanks to @jay0x for the detailed repro with `dpkg`, `journalctl`, and `ls /etc/
 From v5.14.1 to v5.14.2:
 
 ```bash
-wget https://raw.githubusercontent.com/bivlked/amneziawg-installer/v5.14.2/install_amneziawg_en.sh
+wget https://raw.githubusercontent.com/valujin/amneziawg-installer/v5.14.2/install_amneziawg_en.sh
 sudo bash ./install_amneziawg_en.sh --force --yes
 ```
 
 Step 5 of the installer pulls the latest `manage_amneziawg.sh` and `awg_common.sh` with SHA256 verification.
 
-[Full list of changes since v5.14.1](https://github.com/bivlked/amneziawg-installer/compare/v5.14.1...v5.14.2)
+[Full list of changes since v5.14.1](https://github.com/valujin/amneziawg-installer/compare/v5.14.1...v5.14.2)
 
 ---
 
@@ -107,7 +107,7 @@ Step 5 of the installer pulls the latest `manage_amneziawg.sh` and `awg_common.s
 
 ### Highlights
 
-- 📐 **MTU sync between server and client configs on `regen`**. Before v5.14.1 both `awg_common.sh:render_client_config` and `render_server_config` hardcoded `MTU = 1280`. If the user hand-edited MTU in `/etc/amnezia/amneziawg/awg0.conf`, `manage_amneziawg.sh regen` still wrote the stale `1280` into the new client `.conf`. MTU resolution is now ordered: value from the `[Interface]` section of server `awg0.conf` (the source of truth for a running server), then `AWG_MTU` from `awgsetup_cfg.init`, then `1280` as fallback. The live-config parser (`load_awg_params` for AWG parameters from awg0.conf) also reads the `MTU = ...` line now and exports `AWG_MTU`. Values outside the sane range `576..9100` at any stage fall back to `1280`. Reported in Discussion [#38](https://github.com/bivlked/amneziawg-installer/discussions/38) by @E-lmedano.
+- 📐 **MTU sync between server and client configs on `regen`**. Before v5.14.1 both `awg_common.sh:render_client_config` and `render_server_config` hardcoded `MTU = 1280`. If the user hand-edited MTU in `/etc/amnezia/amneziawg/awg0.conf`, `manage_amneziawg.sh regen` still wrote the stale `1280` into the new client `.conf`. MTU resolution is now ordered: value from the `[Interface]` section of server `awg0.conf` (the source of truth for a running server), then `AWG_MTU` from `awgsetup_cfg.init`, then `1280` as fallback. The live-config parser (`load_awg_params` for AWG parameters from awg0.conf) also reads the `MTU = ...` line now and exports `AWG_MTU`. Values outside the sane range `576..9100` at any stage fall back to `1280`. Reported in Discussion [#38](https://github.com/valujin/amneziawg-installer/discussions/38) by @E-lmedano.
 - 🔧 **Installer: `AWG_MTU` variable** in `awgsetup_cfg.init`. Fresh installs write `AWG_MTU=1280` into the config file; the user can override via environment before running the installer (`AWG_MTU=1380 sudo bash install_amneziawg.sh ...`) and the value is preserved. The variable is also added to the `safe_load_config` whitelist.
 
 ### Tests
@@ -126,13 +126,13 @@ Step 5 of the installer pulls the latest `manage_amneziawg.sh` and `awg_common.s
 From v5.13.x / v5.14.0 to v5.14.1:
 
 ```bash
-wget https://raw.githubusercontent.com/bivlked/amneziawg-installer/v5.14.1/install_amneziawg_en.sh
+wget https://raw.githubusercontent.com/valujin/amneziawg-installer/v5.14.1/install_amneziawg_en.sh
 sudo bash ./install_amneziawg_en.sh --force --yes
 ```
 
 Step 5 of the installer pulls fresh `manage_amneziawg.sh` and `awg_common.sh` with SHA256 verification.
 
-[Full diff against v5.14.0](https://github.com/bivlked/amneziawg-installer/compare/v5.14.0...v5.14.1)
+[Full diff against v5.14.0](https://github.com/valujin/amneziawg-installer/compare/v5.14.0...v5.14.1)
 
 ---
 
@@ -164,7 +164,7 @@ Step 5 of the installer pulls fresh `manage_amneziawg.sh` and `awg_common.sh` wi
 - v5.14.1+: minor cleanups uncovered by post-release feedback.
 - v5.15.x: minisign signature activation (after maintainer keypair generation), per-client CPS profiles (Issue #71), `--preset=mobile-awg1` for I1=none carriers.
 
-[Full diff against v5.13.0](https://github.com/bivlked/amneziawg-installer/compare/v5.13.0...v5.14.0)
+[Full diff against v5.13.0](https://github.com/valujin/amneziawg-installer/compare/v5.13.0...v5.14.0)
 
 ---
 
@@ -174,15 +174,15 @@ Step 5 of the installer pulls fresh `manage_amneziawg.sh` and `awg_common.sh` wi
 
 ### Highlights
 
-- 🛡️ **PPA noble fallback for Ubuntu 25.10 / 26.04** ([Issue #46](https://github.com/bivlked/amneziawg-installer/issues/46)). The Amnezia PPA does not yet publish packages for `questing` (25.10) or upcoming Ubuntu codenames. The installer now auto-detects the 404 on `dists/<codename>/Release`, remaps the suite to `noble` in `/etc/apt/sources.list.d/amnezia-ppa.sources` and re-runs `apt update`. If the server has leftover kernel headers from a previous 24.04 install (typical after `do-release-upgrade`), the installer also pulls in `gcc-13` from `questing/universe` so the DKMS autoinstall succeeds for every kernel. No manual `sources.list` edits, no DKMS surprises. The script also repairs a "sticky" `.sources` file from a previous (≤ v5.12.1) run that left `Suites: questing` behind after an apt failure.
-- 🔒 **`--force` safety guard** ([Issue #78](https://github.com/bivlked/amneziawg-installer/issues/78)). Re-running the installer on a server with AmneziaWG already configured now requires an explicit `--force` (or `AWG_FORCE_REINSTALL=1`). Without it, the script early-exits with a clear "already installed and running" message. Server keys, peer configs, and obfuscation parameters survive a re-run, but Step 1 re-tunes sysctl/swap/BBR, `apt-get upgrade` may pull a new kernel (and require another reboot), and Step 7 restarts `awg-quick@awg0` — handshakes drop for a few seconds. The guard removes that foot-gun.
+- 🛡️ **PPA noble fallback for Ubuntu 25.10 / 26.04** ([Issue #46](https://github.com/valujin/amneziawg-installer/issues/46)). The Amnezia PPA does not yet publish packages for `questing` (25.10) or upcoming Ubuntu codenames. The installer now auto-detects the 404 on `dists/<codename>/Release`, remaps the suite to `noble` in `/etc/apt/sources.list.d/amnezia-ppa.sources` and re-runs `apt update`. If the server has leftover kernel headers from a previous 24.04 install (typical after `do-release-upgrade`), the installer also pulls in `gcc-13` from `questing/universe` so the DKMS autoinstall succeeds for every kernel. No manual `sources.list` edits, no DKMS surprises. The script also repairs a "sticky" `.sources` file from a previous (≤ v5.12.1) run that left `Suites: questing` behind after an apt failure.
+- 🔒 **`--force` safety guard** ([Issue #78](https://github.com/valujin/amneziawg-installer/issues/78)). Re-running the installer on a server with AmneziaWG already configured now requires an explicit `--force` (or `AWG_FORCE_REINSTALL=1`). Without it, the script early-exits with a clear "already installed and running" message. Server keys, peer configs, and obfuscation parameters survive a re-run, but Step 1 re-tunes sysctl/swap/BBR, `apt-get upgrade` may pull a new kernel (and require another reboot), and Step 7 restarts `awg-quick@awg0` — handshakes drop for a few seconds. The guard removes that foot-gun.
 - 🧹 **`manage_amneziawg.sh` logging: WARN → stderr.** In v5.12.1 `manage_amneziawg.sh:log_msg` routed only ERROR to stderr and leaked WARN to stdout — broke CI/automation parsing (stdout = "data", stderr = "diagnostics"). WARN and ERROR now both go to stderr, symmetric with `install_amneziawg.sh:log_msg`.
 - 💾 **Precise `/swapfile` check in `/etc/fstab`.** The old substring check `grep -q '/swapfile'` matched commented lines and partial-name hits (`/swapfile.bak`); on re-run the installer could mistakenly skip adding a valid entry — swap then failed to mount on reboot. Switched to an anchored field-aware awk check: `!/^[[:space:]]*#/ && $1 == "/swapfile" && $3 == "swap"`. Idempotent and comment-resistant.
 
 ### Installation
 
 ```bash
-wget https://raw.githubusercontent.com/bivlked/amneziawg-installer/v5.13.0/install_amneziawg_en.sh
+wget https://raw.githubusercontent.com/valujin/amneziawg-installer/v5.13.0/install_amneziawg_en.sh
 chmod +x install_amneziawg_en.sh
 sudo bash ./install_amneziawg_en.sh
 ```
@@ -212,7 +212,7 @@ Run the latest `install_amneziawg.sh` with `--force` (if AmneziaWG is already ru
 - v5.13.1: external review fixes (kernel ambiguity in `build-arm-deb.sh`), backlog refinements.
 - v5.14.0: `--preset=mobile-awg1` (I1=none fallback for Tele2 Krasnoyarsk / Megafon regions).
 
-Full roadmap — [Issue #79](https://github.com/bivlked/amneziawg-installer/issues/79).
+Full roadmap — [Issue #79](https://github.com/valujin/amneziawg-installer/issues/79).
 
 ---
 
@@ -224,12 +224,12 @@ Full roadmap — [Issue #79](https://github.com/bivlked/amneziawg-installer/issu
 
 - 🔧 **`AWG_SKIP_APPLY=1` works again in `manage add` / `manage remove`.** v5.12.0 added an unconditional pre-call to `ensure_amneziawg_kernel_module` before both actions to make `awg syncconf` reliable. Side effect: it broke the offline edit-only flow on dev / CI machines without the kernel module loaded, where `AWG_SKIP_APPLY=1` accumulates changes for batch apply (see [`ADVANCED.en.md`](ADVANCED.en.md) — environment variables section). The pre-call is now wrapped in `if [[ "${AWG_SKIP_APPLY:-0}" != "1" ]]`. `manage restart` is intentionally NOT gated — it is an explicit apply, AWG_SKIP_APPLY has no meaningful semantics for it. Only the literal `1` is honoured; `yes`, `true`, any other string — same behaviour as unset (apply happens).
 - ☁ **`linux-headers-cloud-${arch}` in the repair-module fallback on Debian.** `awg_common.sh:_install_kernel_headers` (used by `manage repair-module`) on Debian only tried `linux-headers-${kernel_ver}` and `linux-headers-${arch}`. On AWS / Azure / GCP / cloud-Hetzner (kernel name contains `-cloud-`) the exact-version package can disappear from the mirror after a kernel upgrade, while the cloud meta `linux-headers-cloud-${arch}` stays available. The installer's step 2 already knew about cloud-headers via smart detection; now `repair-module` knows too and tries the cloud meta before the generic one. Standard kernels (no `-cloud-` in the name) — behaviour unchanged.
-- 📦 **ARM prebuilt packages now decompress correctly with the in-tree kernel decoder** ([Issue #76](https://github.com/bivlked/amneziawg-installer/issues/76)). `scripts/build-arm-deb.sh` used `xz -9` (CRC64 check, 64 MiB dictionary) — the userspace `xz -t` tool considered the stream valid, but the in-tree Linux decoder on Debian 13 trixie kernel `6.12.85+deb13-arm64` (build 2026-04-30) returned `decompression failed with status 6`. Switched to a kernel-compatible preset `xz --check=crc32 --lzma2=dict=1MiB` — matches mainline `scripts/Makefile.modinst`. Plus a build-time sanity gate: after compression, `xz -t` + `xz -d -c` round-trip; if anything fails — `exit 1`, no broken prebuilt ships to the `arm-packages` release. On the v5.12.1 tag push, CI workflow `arm-build.yml` re-publishes all 14 ARM prebuilt packages with the new xz flags.
+- 📦 **ARM prebuilt packages now decompress correctly with the in-tree kernel decoder** ([Issue #76](https://github.com/valujin/amneziawg-installer/issues/76)). `scripts/build-arm-deb.sh` used `xz -9` (CRC64 check, 64 MiB dictionary) — the userspace `xz -t` tool considered the stream valid, but the in-tree Linux decoder on Debian 13 trixie kernel `6.12.85+deb13-arm64` (build 2026-04-30) returned `decompression failed with status 6`. Switched to a kernel-compatible preset `xz --check=crc32 --lzma2=dict=1MiB` — matches mainline `scripts/Makefile.modinst`. Plus a build-time sanity gate: after compression, `xz -t` + `xz -d -c` round-trip; if anything fails — `exit 1`, no broken prebuilt ships to the `arm-packages` release. On the v5.12.1 tag push, CI workflow `arm-build.yml` re-publishes all 14 ARM prebuilt packages with the new xz flags.
 
 ### Install
 
 ```bash
-wget https://raw.githubusercontent.com/bivlked/amneziawg-installer/v5.12.1/install_amneziawg_en.sh
+wget https://raw.githubusercontent.com/valujin/amneziawg-installer/v5.12.1/install_amneziawg_en.sh
 chmod +x install_amneziawg_en.sh
 sudo bash ./install_amneziawg_en.sh
 ```
@@ -254,7 +254,7 @@ Run a fresh `install_amneziawg_en.sh` — at step 5, `manage_amneziawg.sh` and `
 - **Fully backwards-compatible.** All three fixes change behaviour only in narrow regression cases (offline edit / cloud-kernel repair / ARM prebuilt on Debian 13 trixie). The standard install + client flow is unchanged.
 - **No new dependencies.**
 
-[Full diff against v5.12.0](https://github.com/bivlked/amneziawg-installer/compare/v5.12.0...v5.12.1)
+[Full diff against v5.12.0](https://github.com/valujin/amneziawg-installer/compare/v5.12.0...v5.12.1)
 
 ---
 
@@ -278,7 +278,7 @@ Run a fresh `install_amneziawg_en.sh` — at step 5, `manage_amneziawg.sh` and `
 ### Install
 
 ```bash
-wget https://raw.githubusercontent.com/bivlked/amneziawg-installer/v5.12.0/install_amneziawg_en.sh
+wget https://raw.githubusercontent.com/valujin/amneziawg-installer/v5.12.0/install_amneziawg_en.sh
 chmod +x install_amneziawg_en.sh
 sudo bash ./install_amneziawg_en.sh
 ```
@@ -308,8 +308,8 @@ Run the fresh `install_amneziawg_en.sh` — at step 5 `manage_amneziawg.sh` and 
 
 ### Highlights
 
-- 🔁 **`manage regen c1 c2 c3` now regenerates all three clients, not just the first.** Until v5.11.5 the `regen` case picked up only the first argument from the list — the rest were silently dropped. `add` and `remove` already had the loop over arguments, but `regen` was missing it. Behaviour is now consistent: each name is validated and processed individually, a missing client logs a warning and contributes `rc=1`, valid ones still get regenerated. A summary at the end prints `Processed: N of M`. The no-args path (`manage regen` regenerates all clients) is unchanged. ([#70](https://github.com/bivlked/amneziawg-installer/issues/70), @Barmem)
-- 🛡 **Step 2: a hard apt-get update error is no longer masked.** In v5.11.4 I downgraded the `apt-get update` check at step 2 to a warning, so that a brief Launchpad PPA outage (issue #68) would not break the install. Side effect: real apt errors — DNS, GPG mismatch, dpkg lock contention on the base mirror — let the install continue on a stale `apt-cache` and fail later with a less actionable error. The logic now distinguishes the two scenarios: errors only on the Amnezia PPA (issue #68) — continue, `apt_wait_for_ppa_package` retries; any other non-source error — `die` with concrete pointers (DNS / `/etc/apt/keyrings` / dpkg lock). The OOM / silent-crash edge case is also covered — apt failures with no classifiable lines are no longer swallowed even if a PPA URL appears in the output. (post-merge review on [PR #69](https://github.com/bivlked/amneziawg-installer/pull/69))
+- 🔁 **`manage regen c1 c2 c3` now regenerates all three clients, not just the first.** Until v5.11.5 the `regen` case picked up only the first argument from the list — the rest were silently dropped. `add` and `remove` already had the loop over arguments, but `regen` was missing it. Behaviour is now consistent: each name is validated and processed individually, a missing client logs a warning and contributes `rc=1`, valid ones still get regenerated. A summary at the end prints `Processed: N of M`. The no-args path (`manage regen` regenerates all clients) is unchanged. ([#70](https://github.com/valujin/amneziawg-installer/issues/70), @Barmem)
+- 🛡 **Step 2: a hard apt-get update error is no longer masked.** In v5.11.4 I downgraded the `apt-get update` check at step 2 to a warning, so that a brief Launchpad PPA outage (issue #68) would not break the install. Side effect: real apt errors — DNS, GPG mismatch, dpkg lock contention on the base mirror — let the install continue on a stale `apt-cache` and fail later with a less actionable error. The logic now distinguishes the two scenarios: errors only on the Amnezia PPA (issue #68) — continue, `apt_wait_for_ppa_package` retries; any other non-source error — `die` with concrete pointers (DNS / `/etc/apt/keyrings` / dpkg lock). The OOM / silent-crash edge case is also covered — apt failures with no classifiable lines are no longer swallowed even if a PPA URL appears in the output. (post-merge review on [PR #69](https://github.com/valujin/amneziawg-installer/pull/69))
 
 ### Other
 
@@ -318,7 +318,7 @@ Run the fresh `install_amneziawg_en.sh` — at step 5 `manage_amneziawg.sh` and 
 ### Install
 
 ```bash
-wget https://raw.githubusercontent.com/bivlked/amneziawg-installer/v5.11.5/install_amneziawg_en.sh
+wget https://raw.githubusercontent.com/valujin/amneziawg-installer/v5.11.5/install_amneziawg_en.sh
 chmod +x install_amneziawg_en.sh
 sudo bash ./install_amneziawg_en.sh
 ```
@@ -348,13 +348,13 @@ Run the fresh `install_amneziawg_en.sh` — at step 5 `manage_amneziawg.sh` and 
 
 ### Highlights
 
-- 🔑 **`vpn://` import into the Amnezia VPN app now carries the PSK.** With `manage add --psk` the PresharedKey was correctly written to the server `[Peer]` and the client `.conf` since v5.11.1, but the `vpn://` URI was missing the `psk_key` field that the AmneziaVPN parser reads — clients silently came up without the preshared key, the server (which had it) rejected the handshake, and `awg show transfer` stayed at «never». Also tightened trailing CR / space stripping for `PresharedKey =` and `AllowedIPs =` so CRLF configs edited on Windows no longer leak `\r` into the JSON. ([#67](https://github.com/bivlked/amneziawg-installer/issues/67), @haritos90)
-- 🔁 **Install survives a brief Launchpad PPA outage.** When `ppa.launchpadcontent.net` is briefly unreachable (as on May 3rd per [#68](https://github.com/bivlked/amneziawg-installer/issues/68)), the installer now waits for `amneziawg-dkms` to show up in `apt-cache` for up to 3 attempts with 30 s and 60 s backoff (and a fresh `apt-get update` between retries). Checking `apt-cache` matters: `apt-get update` itself is tolerant to an unreachable InRelease (returns 0 even when the PPA never downloaded), so a plain rc-based retry would not catch this case. After three failures a friendly message points the user at the issue and explains this is a Launchpad infrastructure outage, not a script bug. ([#68](https://github.com/bivlked/amneziawg-installer/issues/68), @saligin / @baikov)
+- 🔑 **`vpn://` import into the Amnezia VPN app now carries the PSK.** With `manage add --psk` the PresharedKey was correctly written to the server `[Peer]` and the client `.conf` since v5.11.1, but the `vpn://` URI was missing the `psk_key` field that the AmneziaVPN parser reads — clients silently came up without the preshared key, the server (which had it) rejected the handshake, and `awg show transfer` stayed at «never». Also tightened trailing CR / space stripping for `PresharedKey =` and `AllowedIPs =` so CRLF configs edited on Windows no longer leak `\r` into the JSON. ([#67](https://github.com/valujin/amneziawg-installer/issues/67), @haritos90)
+- 🔁 **Install survives a brief Launchpad PPA outage.** When `ppa.launchpadcontent.net` is briefly unreachable (as on May 3rd per [#68](https://github.com/valujin/amneziawg-installer/issues/68)), the installer now waits for `amneziawg-dkms` to show up in `apt-cache` for up to 3 attempts with 30 s and 60 s backoff (and a fresh `apt-get update` between retries). Checking `apt-cache` matters: `apt-get update` itself is tolerant to an unreachable InRelease (returns 0 even when the PPA never downloaded), so a plain rc-based retry would not catch this case. After three failures a friendly message points the user at the issue and explains this is a Launchpad infrastructure outage, not a script bug. ([#68](https://github.com/valujin/amneziawg-installer/issues/68), @saligin / @baikov)
 
 ### Install
 
 ```bash
-wget https://raw.githubusercontent.com/bivlked/amneziawg-installer/v5.11.4/install_amneziawg_en.sh
+wget https://raw.githubusercontent.com/valujin/amneziawg-installer/v5.11.4/install_amneziawg_en.sh
 chmod +x install_amneziawg_en.sh
 sudo bash ./install_amneziawg_en.sh
 ```
@@ -385,16 +385,16 @@ Run the fresh `install_amneziawg_en.sh` — at step 5 `manage_amneziawg.sh` and 
 
 ### Highlights
 
-- 🍎 **Shadowrocket on iOS / macOS now connects out of the box.** The `--psk` flag for `manage add` shipped in v5.11.1 but was not visible in the README — it is now in the Quick Reference and has its own FAQ entry. ([#62](https://github.com/bivlked/amneziawg-installer/issues/62), @andreykorobko)
-- 📡 **Ping inside the tunnel — server ↔ clients** — a step-by-step recipe for UFW + `/etc/ufw/before.rules` in the FAQ. Explicit warning: `ufw allow ... proto icmp` does **not** work (UFW only supports `tcp/udp/esp/ah/gre/ipv6` via the `proto` flag). ([#63](https://github.com/bivlked/amneziawg-installer/discussions/63), @PavelVVrn)
-- 🌐 **Mobile carrier → I1 map extended.** Megafon (regions) and Tele2 (Krasnoyarsk) updated to `I1=absent` — the AWG 1.0 fallback for carriers where CPS packets themselves trigger DPI blocks. Exact commands below the table (`systemctl restart awg-quick@awg0` + `manage regen <name>`). ([#42](https://github.com/bivlked/amneziawg-installer/issues/42), @alkorrnd)
+- 🍎 **Shadowrocket on iOS / macOS now connects out of the box.** The `--psk` flag for `manage add` shipped in v5.11.1 but was not visible in the README — it is now in the Quick Reference and has its own FAQ entry. ([#62](https://github.com/valujin/amneziawg-installer/issues/62), @andreykorobko)
+- 📡 **Ping inside the tunnel — server ↔ clients** — a step-by-step recipe for UFW + `/etc/ufw/before.rules` in the FAQ. Explicit warning: `ufw allow ... proto icmp` does **not** work (UFW only supports `tcp/udp/esp/ah/gre/ipv6` via the `proto` flag). ([#63](https://github.com/valujin/amneziawg-installer/discussions/63), @PavelVVrn)
+- 🌐 **Mobile carrier → I1 map extended.** Megafon (regions) and Tele2 (Krasnoyarsk) updated to `I1=absent` — the AWG 1.0 fallback for carriers where CPS packets themselves trigger DPI blocks. Exact commands below the table (`systemctl restart awg-quick@awg0` + `manage regen <name>`). ([#42](https://github.com/valujin/amneziawg-installer/issues/42), @alkorrnd)
 - 🤖 **Auto-scripts for cron / Ansible / Proxmox.** `manage --yes` (flag) or `AWG_YES=1` (env) skip the confirm prompt in `remove`, `restore`, `restart`. Default behavior is unchanged (opt-in).
 - 🗂️ **Backups without collisions.** Millisecond suffix in filenames (`awg_backup_2026-04-28_15-53-50.123.tar.gz`) protects against overwrite when two backups land in the same second (e.g., `regen → backup → modify → backup`). Legacy filenames (no `.NNN`) keep working.
 
 ### Install
 
 ```bash
-wget https://raw.githubusercontent.com/bivlked/amneziawg-installer/v5.11.3/install_amneziawg_en.sh
+wget https://raw.githubusercontent.com/valujin/amneziawg-installer/v5.11.3/install_amneziawg_en.sh
 chmod +x install_amneziawg_en.sh
 sudo bash ./install_amneziawg_en.sh
 ```
@@ -452,7 +452,7 @@ No new ones: `qrencode` was already in the installer step-2 required list (used 
 
 ## [5.11.1] — 2026-04-23
 
-UX patch. Three small improvements for `manage` on manual (non-installer) setups — e.g. `amneziawg-go` userspace in LXC. Credit to [@Akh-commits](https://github.com/Akh-commits) for the detailed live-test in [Issue #51](https://github.com/bivlked/amneziawg-installer/issues/51) on 2026-04-22, which is where all three fixes came from.
+UX patch. Three small improvements for `manage` on manual (non-installer) setups — e.g. `amneziawg-go` userspace in LXC. Credit to [@Akh-commits](https://github.com/Akh-commits) for the detailed live-test in [Issue #51](https://github.com/valujin/amneziawg-installer/issues/51) on 2026-04-22, which is where all three fixes came from.
 
 ### Fixed / Added
 
@@ -501,7 +501,7 @@ Robustness bundle — I closed a batch of scenarios where `install` or `manage` 
 
 - **Minimum `awg0.conf` for AWG 2.0 in `ADVANCED.md` / `ADVANCED.en.md`.** A new collapsible section with a ready example for manual setups (`amneziawg-go` in LXC, etc.): all 11 obfuscation parameters (`Jc`/`Jmin`/`Jmax`/`S1`-`S4`/`H1`-`H4`), notes about S3/S4 (added to AWG 2.0 later than S1/S2 — configs carried over from AWG 1.x may not have them), `INT32_MAX` upper bound on H1-H4, `I1` being optional.
 - **Explanation of the `#_Name = <name>` marker** inside the "Full List of Management Commands" section — previously implicit in examples only. It is now explicit: `list/remove/regen/modify` rely on this marker in each `[Peer]` block; if you migrate `awg0.conf` from an old server, add `#_Name` by hand.
-- **"LXC / Docker via amneziawg-go (userspace)"** section in ADVANCED (source: [@Akh-commits](https://github.com/Akh-commits), [Issue #51](https://github.com/bivlked/amneziawg-installer/issues/51)). A working recipe for a privileged LXC on Proxmox 9 with a Debian 13 guest, security tradeoffs, prebuilt binary vs source build. Shipped to main before the v5.11.0 tag; listing it here for completeness.
+- **"LXC / Docker via amneziawg-go (userspace)"** section in ADVANCED (source: [@Akh-commits](https://github.com/Akh-commits), [Issue #51](https://github.com/valujin/amneziawg-installer/issues/51)). A working recipe for a privileged LXC on Proxmox 9 with a Debian 13 guest, security tradeoffs, prebuilt binary vs source build. Shipped to main before the v5.11.0 tag; listing it here for completeness.
 
 ### Tests
 
@@ -539,7 +539,7 @@ Urgent hotfix. In v5.10.1 every fresh AmneziaWG 2.0 install died at step 1 with 
 
 ## [5.10.1] — 2026-04-19
 
-Compatibility with mirrors that don't publish source packages (Hetzner, AWS, and others) — [Discussion #47](https://github.com/bivlked/amneziawg-installer/discussions/47).
+Compatibility with mirrors that don't publish source packages (Hetzner, AWS, and others) — [Discussion #47](https://github.com/valujin/amneziawg-installer/discussions/47).
 
 ### Fixed
 
@@ -554,7 +554,7 @@ Compatibility with mirrors that don't publish source packages (Hetzner, AWS, and
 
 ## [5.10.0] — 2026-04-16
 
-Mobile network optimization: `--preset=mobile` and `--jc`/`--jmin`/`--jmax` CLI flags, comprehensive security and reliability audit across the entire codebase ([Discussion #38](https://github.com/bivlked/amneziawg-installer/discussions/38), [Issue #42](https://github.com/bivlked/amneziawg-installer/issues/42)).
+Mobile network optimization: `--preset=mobile` and `--jc`/`--jmin`/`--jmax` CLI flags, comprehensive security and reliability audit across the entire codebase ([Discussion #38](https://github.com/valujin/amneziawg-installer/discussions/38), [Issue #42](https://github.com/valujin/amneziawg-installer/issues/42)).
 
 ### Added
 
@@ -592,13 +592,13 @@ Mobile network optimization: `--preset=mobile` and `--jc`/`--jmin`/`--jmax` CLI 
 
 - **+33 new bats tests** (131 total, up from 98). `test_preset.bats` (18): preset selection, CLI overrides, validation. `test_validate.bats` (+8): protocol boundary checks. `test_safe_load_config.bats` (+4): CRLF, BOM, BOM+CRLF, values with `=`. `test_validate_endpoint.bats` (+3): full IPv6, single-label hostname, empty brackets.
 
-> 📣 **Main features of the 5.x branch** — see the [v5.8.0 release notes](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.8.0). ARM support — see [v5.9.0](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.9.0). v5.10.0 adds mobile network optimization and a comprehensive audit with no breaking changes.
+> 📣 **Main features of the 5.x branch** — see the [v5.8.0 release notes](https://github.com/valujin/amneziawg-installer/releases/tag/v5.8.0). ARM support — see [v5.9.0](https://github.com/valujin/amneziawg-installer/releases/tag/v5.9.0). v5.10.0 adds mobile network optimization and a comprehensive audit with no breaking changes.
 
 ---
 
 ## [5.9.0] — 2026-04-15
 
-Raspberry Pi (arm64 and armhf) and ARM64 server support (AWS Graviton, Oracle Ampere, Hetzner arm64). Full implementation by [@pyr0ball](https://github.com/pyr0ball) ([PR #43](https://github.com/bivlked/amneziawg-installer/pull/43), [Issue #37](https://github.com/bivlked/amneziawg-installer/issues/37)).
+Raspberry Pi (arm64 and armhf) and ARM64 server support (AWS Graviton, Oracle Ampere, Hetzner arm64). Full implementation by [@pyr0ball](https://github.com/pyr0ball) ([PR #43](https://github.com/valujin/amneziawg-installer/pull/43), [Issue #37](https://github.com/valujin/amneziawg-installer/issues/37)).
 
 ### Added
 
@@ -618,7 +618,7 @@ Raspberry Pi (arm64 and armhf) and ARM64 server support (AWS Graviton, Oracle Am
 - Auto-tracking kernel updates / broken-package detection
 - Armbian and other SBC vendor kernels (follow-up)
 
-> 📣 **Main release notes for the 5.x branch** — see the [v5.8.0 release notes](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.8.0). v5.9.0 is a minor bump adding ARM support with no breaking changes for existing x86_64 installs.
+> 📣 **Main release notes for the 5.x branch** — see the [v5.8.0 release notes](https://github.com/valujin/amneziawg-installer/releases/tag/v5.8.0). v5.9.0 is a minor bump adding ARM support with no breaking changes for existing x86_64 installs.
 
 ---
 
@@ -643,13 +643,13 @@ Reliability and security hardening following a review of the installer and manag
 
 - **+7 new bats tests.** `test_validate_endpoint.bats` +4: reject `999.999.999.999`, `256.1.1.1`; accept `255.255.255.255`, `0.0.0.0`. `test_restore_backup.bats` +1: real archive + mock tar injecting a block device entry → type-check rejects (proper negative test with real archive creation). `test_apply_config.bats` +2: flock timeout returns 1; systemctl restart failure returns non-zero. Total: **92 bats tests**, all PASS.
 
-> 📣 **The main release notes bundle for the 5.8.x branch** lives in [v5.8.0 release notes](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.8.0). v5.8.4 is a hardening patch on top of 5.8.3 with no breaking changes.
+> 📣 **The main release notes bundle for the 5.8.x branch** lives in [v5.8.0 release notes](https://github.com/valujin/amneziawg-installer/releases/tag/v5.8.0). v5.8.4 is a hardening patch on top of 5.8.3 with no breaking changes.
 
 ---
 
 ## [5.8.3] — 2026-04-11
 
-A batch of hardening fixes and targeted improvements following [Issue #42](https://github.com/bivlked/amneziawg-installer/issues/42) and an internal audit.
+A batch of hardening fixes and targeted improvements following [Issue #42](https://github.com/valujin/amneziawg-installer/issues/42) and an internal audit.
 
 ### Security
 
@@ -658,7 +658,7 @@ A batch of hardening fixes and targeted improvements following [Issue #42](https
 
 ### Fixed
 
-- **Mobile internet — Yota/Tele2 blocked VPN ([Issue #42](https://github.com/bivlked/amneziawg-installer/issues/42)).** Reported by @markmokrenko: after a standard install the VPN fails to connect on Yota and Tele2, while Beeline works. Root cause: `Jmin`/`Jmax` values. This continues the Discussion #38 story — mobile carriers are sensitive to junk packet size. Lowered the `Jmax` offset from `Jmin+100..500` to `Jmin+50..250`, the maximum junk packet size drops from ~590 to ~340 bytes. Obfuscation strength is preserved, mobile compatibility improves.
+- **Mobile internet — Yota/Tele2 blocked VPN ([Issue #42](https://github.com/valujin/amneziawg-installer/issues/42)).** Reported by @markmokrenko: after a standard install the VPN fails to connect on Yota and Tele2, while Beeline works. Root cause: `Jmin`/`Jmax` values. This continues the Discussion #38 story — mobile carriers are sensitive to junk packet size. Lowered the `Jmax` offset from `Jmin+100..500` to `Jmin+50..250`, the maximum junk packet size drops from ~590 to ~340 bytes. Obfuscation strength is preserved, mobile compatibility improves.
 
 ### Tests
 
@@ -668,7 +668,7 @@ A batch of hardening fixes and targeted improvements following [Issue #42](https
 
 The release was validated on a clean Ubuntu 24.04 LTS: 13/13 checks passed. Tar validation was tested against three attack types — path traversal, absolute paths, symlinks. The SHA256 verify_sha256 function was tested with both correct and incorrect hash inputs. UFW routing cleanup during `--uninstall` was confirmed.
 
-> 📣 **The main release notes bundle for the 5.8.x branch** lives in [v5.8.0 release notes](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.8.0). v5.8.3 is a hotfix on top of 5.8.2 with security hardening and a narrower Jmax range for mobile networks.
+> 📣 **The main release notes bundle for the 5.8.x branch** lives in [v5.8.0 release notes](https://github.com/valujin/amneziawg-installer/releases/tag/v5.8.0). v5.8.3 is a hotfix on top of 5.8.2 with security hardening and a narrower Jmax range for mobile networks.
 
 ---
 
@@ -688,11 +688,11 @@ The release was validated on a clean Ubuntu 24.04 LTS: 13/13 checks passed. Tar 
 
 ## [5.8.1] — 2026-04-09
 
-Targeted hotfix on top of v5.8.0 following [Discussion #40](https://github.com/bivlked/amneziawg-installer/discussions/40) from @z036: the randomized H1-H4 values from v5.8.0 could fall into the `[2^31, 2^32-1]` range, which the `amneziawg-windows-client` config editor underlines as invalid and refuses to save. The server (amneziawg-go) accepts the full `uint32`; the issue is purely in the client-side UI validator.
+Targeted hotfix on top of v5.8.0 following [Discussion #40](https://github.com/valujin/amneziawg-installer/discussions/40) from @z036: the randomized H1-H4 values from v5.8.0 could fall into the `[2^31, 2^32-1]` range, which the `amneziawg-windows-client` config editor underlines as invalid and refuses to save. The server (amneziawg-go) accepts the full `uint32`; the issue is purely in the client-side UI validator.
 
 ### Fixed
 
-- **H1-H4 Windows client compatibility ([Discussion #40](https://github.com/bivlked/amneziawg-installer/discussions/40)):** `generate_awg_h_ranges` now caps the upper bound at `2^31-1 = 2147483647` instead of the full `uint32`. This matches `isValidHField()` in [amnezia-vpn/amneziawg-windows-client#85](https://github.com/amnezia-vpn/amneziawg-windows-client/issues/85) (upstream bug, open since February 2026, not yet fixed). Implementation: a `0x7FFFFFFF` bit mask is applied to the `od -N32 -tu4 /dev/urandom` output, and the fallback path now uses `rand_range 0 2147483647`. No bias is introduced — each lower bit stays independent. Obfuscation strength is not weakened: four non-overlapping pairs in `[0, 2^31)` with a minimum width of 1000 each still give an astronomically large key space, DPI cannot fingerprint by default values. Thanks @z036 for the precise screenshot with the underlined fields.
+- **H1-H4 Windows client compatibility ([Discussion #40](https://github.com/valujin/amneziawg-installer/discussions/40)):** `generate_awg_h_ranges` now caps the upper bound at `2^31-1 = 2147483647` instead of the full `uint32`. This matches `isValidHField()` in [amnezia-vpn/amneziawg-windows-client#85](https://github.com/amnezia-vpn/amneziawg-windows-client/issues/85) (upstream bug, open since February 2026, not yet fixed). Implementation: a `0x7FFFFFFF` bit mask is applied to the `od -N32 -tu4 /dev/urandom` output, and the fallback path now uses `rand_range 0 2147483647`. No bias is introduced — each lower bit stays independent. Obfuscation strength is not weakened: four non-overlapping pairs in `[0, 2^31)` with a minimum width of 1000 each still give an astronomically large key space, DPI cannot fingerprint by default values. Thanks @z036 for the precise screenshot with the underlined fields.
 
 ### Compatibility
 
@@ -708,7 +708,7 @@ Targeted hotfix on top of v5.8.0 following [Discussion #40](https://github.com/b
 
 - **ADVANCED.md/en FAQ**: added an entry about the upstream `amneziawg-windows-client` bug with a root-cause explanation, links to upstream issue #85 and Discussion #40, and three workaround options for v5.8.0 users.
 
-> 📣 **The main release notes bundle for the 5.8.x branch** lives in [v5.8.0 release notes](https://github.com/bivlked/amneziawg-installer/releases/tag/v5.8.0). That is where the full Discussion #38 (Russian DPI fingerprinting) context and the multi-round code-audit story lives. v5.8.1 is a hotfix on top of 5.8.0, recommended for everyone using the Windows client.
+> 📣 **The main release notes bundle for the 5.8.x branch** lives in [v5.8.0 release notes](https://github.com/valujin/amneziawg-installer/releases/tag/v5.8.0). That is where the full Discussion #38 (Russian DPI fingerprinting) context and the multi-round code-audit story lives. v5.8.1 is a hotfix on top of 5.8.0, recommended for everyone using the Windows client.
 
 ---
 
@@ -1100,7 +1100,7 @@ Major security and reliability update after several consecutive code audits. The
 
 - **AWG 2.0 protocol** is not compatible with AWG 1.x. All clients must update their configuration.
 - Requires **Amnezia VPN >= 4.8.12.7** client with AWG 2.0 support.
-- Previous version is available in the [`legacy/v4`](https://github.com/bivlked/amneziawg-installer/tree/legacy/v4) branch.
+- Previous version is available in the [`legacy/v4`](https://github.com/valujin/amneziawg-installer/tree/legacy/v4) branch.
 
 ### Added
 
@@ -1147,35 +1147,35 @@ Major security and reliability update after several consecutive code audits. The
 - Diagnostic report (`--diagnostic`).
 - Full uninstall (`--uninstall`).
 
-[Unreleased]: https://github.com/bivlked/amneziawg-installer/compare/v5.10.2...HEAD
-[5.10.2]: https://github.com/bivlked/amneziawg-installer/compare/v5.10.1...v5.10.2
-[5.10.1]: https://github.com/bivlked/amneziawg-installer/compare/v5.10.0...v5.10.1
-[5.10.0]: https://github.com/bivlked/amneziawg-installer/compare/v5.9.0...v5.10.0
-[5.9.0]: https://github.com/bivlked/amneziawg-installer/compare/v5.8.4...v5.9.0
-[5.8.4]: https://github.com/bivlked/amneziawg-installer/compare/v5.8.3...v5.8.4
-[5.8.3]: https://github.com/bivlked/amneziawg-installer/compare/v5.8.2...v5.8.3
-[5.8.2]: https://github.com/bivlked/amneziawg-installer/compare/v5.8.1...v5.8.2
-[5.8.1]: https://github.com/bivlked/amneziawg-installer/compare/v5.8.0...v5.8.1
-[5.8.0]: https://github.com/bivlked/amneziawg-installer/compare/v5.7.12...v5.8.0
-[5.7.12]: https://github.com/bivlked/amneziawg-installer/compare/v5.7.11...v5.7.12
-[5.7.11]: https://github.com/bivlked/amneziawg-installer/compare/v5.7.10...v5.7.11
-[5.7.10]: https://github.com/bivlked/amneziawg-installer/compare/v5.7.9...v5.7.10
-[5.7.9]: https://github.com/bivlked/amneziawg-installer/compare/v5.7.8...v5.7.9
-[5.7.8]: https://github.com/bivlked/amneziawg-installer/compare/v5.7.7...v5.7.8
-[5.7.7]: https://github.com/bivlked/amneziawg-installer/compare/v5.7.6...v5.7.7
-[5.7.6]: https://github.com/bivlked/amneziawg-installer/compare/v5.7.5...v5.7.6
-[5.7.5]: https://github.com/bivlked/amneziawg-installer/compare/v5.7.4...v5.7.5
-[5.7.4]: https://github.com/bivlked/amneziawg-installer/compare/v5.7.3...v5.7.4
-[5.7.3]: https://github.com/bivlked/amneziawg-installer/compare/v5.7.2...v5.7.3
-[5.7.2]: https://github.com/bivlked/amneziawg-installer/compare/v5.7.1...v5.7.2
-[5.7.1]: https://github.com/bivlked/amneziawg-installer/compare/v5.7.0...v5.7.1
-[5.7.0]: https://github.com/bivlked/amneziawg-installer/compare/v5.6.0...v5.7.0
-[5.6.0]: https://github.com/bivlked/amneziawg-installer/compare/v5.5.1...v5.6.0
-[5.5.1]: https://github.com/bivlked/amneziawg-installer/compare/v5.5...v5.5.1
-[5.5]: https://github.com/bivlked/amneziawg-installer/compare/v5.4...v5.5
-[5.4]: https://github.com/bivlked/amneziawg-installer/compare/v5.3...v5.4
-[5.3]: https://github.com/bivlked/amneziawg-installer/compare/v5.2...v5.3
-[5.2]: https://github.com/bivlked/amneziawg-installer/compare/v5.1...v5.2
-[5.1]: https://github.com/bivlked/amneziawg-installer/compare/v5.0...v5.1
-[5.0]: https://github.com/bivlked/amneziawg-installer/compare/v4.0...v5.0
-[4.0]: https://github.com/bivlked/amneziawg-installer/releases/tag/v4.0
+[Unreleased]: https://github.com/valujin/amneziawg-installer/compare/v5.10.2...HEAD
+[5.10.2]: https://github.com/valujin/amneziawg-installer/compare/v5.10.1...v5.10.2
+[5.10.1]: https://github.com/valujin/amneziawg-installer/compare/v5.10.0...v5.10.1
+[5.10.0]: https://github.com/valujin/amneziawg-installer/compare/v5.9.0...v5.10.0
+[5.9.0]: https://github.com/valujin/amneziawg-installer/compare/v5.8.4...v5.9.0
+[5.8.4]: https://github.com/valujin/amneziawg-installer/compare/v5.8.3...v5.8.4
+[5.8.3]: https://github.com/valujin/amneziawg-installer/compare/v5.8.2...v5.8.3
+[5.8.2]: https://github.com/valujin/amneziawg-installer/compare/v5.8.1...v5.8.2
+[5.8.1]: https://github.com/valujin/amneziawg-installer/compare/v5.8.0...v5.8.1
+[5.8.0]: https://github.com/valujin/amneziawg-installer/compare/v5.7.12...v5.8.0
+[5.7.12]: https://github.com/valujin/amneziawg-installer/compare/v5.7.11...v5.7.12
+[5.7.11]: https://github.com/valujin/amneziawg-installer/compare/v5.7.10...v5.7.11
+[5.7.10]: https://github.com/valujin/amneziawg-installer/compare/v5.7.9...v5.7.10
+[5.7.9]: https://github.com/valujin/amneziawg-installer/compare/v5.7.8...v5.7.9
+[5.7.8]: https://github.com/valujin/amneziawg-installer/compare/v5.7.7...v5.7.8
+[5.7.7]: https://github.com/valujin/amneziawg-installer/compare/v5.7.6...v5.7.7
+[5.7.6]: https://github.com/valujin/amneziawg-installer/compare/v5.7.5...v5.7.6
+[5.7.5]: https://github.com/valujin/amneziawg-installer/compare/v5.7.4...v5.7.5
+[5.7.4]: https://github.com/valujin/amneziawg-installer/compare/v5.7.3...v5.7.4
+[5.7.3]: https://github.com/valujin/amneziawg-installer/compare/v5.7.2...v5.7.3
+[5.7.2]: https://github.com/valujin/amneziawg-installer/compare/v5.7.1...v5.7.2
+[5.7.1]: https://github.com/valujin/amneziawg-installer/compare/v5.7.0...v5.7.1
+[5.7.0]: https://github.com/valujin/amneziawg-installer/compare/v5.6.0...v5.7.0
+[5.6.0]: https://github.com/valujin/amneziawg-installer/compare/v5.5.1...v5.6.0
+[5.5.1]: https://github.com/valujin/amneziawg-installer/compare/v5.5...v5.5.1
+[5.5]: https://github.com/valujin/amneziawg-installer/compare/v5.4...v5.5
+[5.4]: https://github.com/valujin/amneziawg-installer/compare/v5.3...v5.4
+[5.3]: https://github.com/valujin/amneziawg-installer/compare/v5.2...v5.3
+[5.2]: https://github.com/valujin/amneziawg-installer/compare/v5.1...v5.2
+[5.1]: https://github.com/valujin/amneziawg-installer/compare/v5.0...v5.1
+[5.0]: https://github.com/valujin/amneziawg-installer/compare/v4.0...v5.0
+[4.0]: https://github.com/valujin/amneziawg-installer/releases/tag/v4.0

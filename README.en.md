@@ -18,15 +18,15 @@
   <img src="https://img.shields.io/badge/Ubuntu-24.04_|_25.10_|_26.04-orange" alt="Ubuntu 24.04 | 25.10 | 26.04">
   <img src="https://img.shields.io/badge/Debian-12_|_13-A81D33" alt="Debian 12 | 13">
   <img src="https://img.shields.io/badge/Architecture-x86__64_|_ARM64_|_ARMv7-green" alt="x86_64 | ARM64 | ARMv7">
-  <a href="https://github.com/bivlked/amneziawg-installer/blob/main/LICENSE"><img src="https://img.shields.io/github/license/bivlked/amneziawg-installer" alt="License"></a>
+  <a href="https://github.com/valujin/amneziawg-installer/blob/main/LICENSE"><img src="https://img.shields.io/github/license/valujin/amneziawg-installer" alt="License"></a>
   <img src="https://img.shields.io/badge/Status-Stable-success" alt="Status">
-  <a href="https://github.com/bivlked/amneziawg-installer/releases"><img src="https://img.shields.io/badge/Installer_Version-5.14.1-blue" alt="Version"></a>
+  <a href="https://github.com/valujin/amneziawg-installer/releases"><img src="https://img.shields.io/badge/Installer_Version-5.14.1-blue" alt="Version"></a>
   <img src="https://img.shields.io/badge/AmneziaWG-2.0-blueviolet" alt="AWG 2.0">
-  <a href="https://github.com/bivlked/amneziawg-installer/actions/workflows/shellcheck.yml"><img src="https://github.com/bivlked/amneziawg-installer/actions/workflows/shellcheck.yml/badge.svg" alt="ShellCheck"></a>
-  <a href="https://github.com/bivlked/amneziawg-installer/actions/workflows/test.yml"><img src="https://github.com/bivlked/amneziawg-installer/actions/workflows/test.yml/badge.svg" alt="Tests"></a>
-  <a href="https://github.com/bivlked/amneziawg-installer/stargazers"><img src="https://img.shields.io/github/stars/bivlked/amneziawg-installer?style=flat" alt="Stars"></a>
-  <a href="https://github.com/bivlked/amneziawg-installer/network/members"><img src="https://img.shields.io/github/forks/bivlked/amneziawg-installer?style=flat" alt="Forks"></a>
-  <img src="https://img.shields.io/github/last-commit/bivlked/amneziawg-installer" alt="Last commit">
+  <a href="https://github.com/valujin/amneziawg-installer/actions/workflows/shellcheck.yml"><img src="https://github.com/valujin/amneziawg-installer/actions/workflows/shellcheck.yml/badge.svg" alt="ShellCheck"></a>
+  <a href="https://github.com/valujin/amneziawg-installer/actions/workflows/test.yml"><img src="https://github.com/valujin/amneziawg-installer/actions/workflows/test.yml/badge.svg" alt="Tests"></a>
+  <a href="https://github.com/valujin/amneziawg-installer/stargazers"><img src="https://img.shields.io/github/stars/valujin/amneziawg-installer?style=flat" alt="Stars"></a>
+  <a href="https://github.com/valujin/amneziawg-installer/network/members"><img src="https://img.shields.io/github/forks/valujin/amneziawg-installer?style=flat" alt="Forks"></a>
+  <img src="https://img.shields.io/github/last-commit/valujin/amneziawg-installer" alt="Last commit">
 </p>
 
 <p align="center">
@@ -119,7 +119,7 @@ This installer is the headless SSH path: minimum footprint, no web panel, kernel
 > 📘 **Full deployment guide:** [Install AmneziaWG VPN server on Ubuntu/Debian VPS](INSTALL_VPS.md) - covers VPS choice, ARM, troubleshooting, and uninstall.
 
 ```bash
-wget https://raw.githubusercontent.com/bivlked/amneziawg-installer/v5.14.1/install_amneziawg_en.sh
+wget https://raw.githubusercontent.com/valujin/amneziawg-installer/v5.14.1/install_amneziawg_en.sh
 chmod +x install_amneziawg_en.sh
 sudo bash ./install_amneziawg_en.sh
 ```
@@ -178,7 +178,7 @@ If your VPN is unstable on mobile data, run the installer with `--preset=mobile`
 - **Beeline** — default preset, no flags needed
 - **Home / wired ISPs** — default preset usually works out of the box
 
-Your carrier is not on the list? Try `--preset=mobile`. If that doesn't work — open a thread in [Discussions](https://github.com/bivlked/amneziawg-installer/discussions) or [Issues](https://github.com/bivlked/amneziawg-installer/issues) and I'll add the entry.
+Your carrier is not on the list? Try `--preset=mobile`. If that doesn't work — open a thread in [Discussions](https://github.com/valujin/amneziawg-installer/discussions) or [Issues](https://github.com/valujin/amneziawg-installer/issues) and I'll add the entry.
 
 > Full operator parameter table (Jc, Jmin, Jmax, I1) — in [ADVANCED.en.md → FAQ "connects over cellular only on the third attempt"](ADVANCED.en.md#faq-advanced-adv). Per-flag overrides via `--jc`/`--jmin`/`--jmax` — in [ADVANCED.en.md → Presets](ADVANCED.en.md#presets-adv).
 
@@ -251,8 +251,8 @@ This installation method handles interactive prompts and colored output correctl
 
 2.  **Download the script:**
     ```bash
-    wget https://raw.githubusercontent.com/bivlked/amneziawg-installer/v5.14.1/install_amneziawg_en.sh
-    # or: curl -fLo install_amneziawg_en.sh https://raw.githubusercontent.com/bivlked/amneziawg-installer/v5.14.1/install_amneziawg_en.sh
+    wget https://raw.githubusercontent.com/valujin/amneziawg-installer/v5.14.1/install_amneziawg_en.sh
+    # or: curl -fLo install_amneziawg_en.sh https://raw.githubusercontent.com/valujin/amneziawg-installer/v5.14.1/install_amneziawg_en.sh
     ```
 3.  **Make it executable:**
     ```bash
@@ -266,7 +266,7 @@ This installation method handles interactive prompts and colored output correctl
 
     > **Russian version:** For Russian output, use `install_amneziawg.sh`:
     > ```bash
-    > wget https://raw.githubusercontent.com/bivlked/amneziawg-installer/v5.14.1/install_amneziawg.sh
+    > wget https://raw.githubusercontent.com/valujin/amneziawg-installer/v5.14.1/install_amneziawg.sh
     > sudo bash ./install_amneziawg.sh
     > ```
     > The Russian version is functionally identical; only user-facing messages and logs are in Russian.
@@ -377,11 +377,11 @@ sudo bash /root/awg/manage_amneziawg.sh <command> [arguments]
 
 ```bash
 # Installation (English)
-wget https://raw.githubusercontent.com/bivlked/amneziawg-installer/v5.14.1/install_amneziawg_en.sh
+wget https://raw.githubusercontent.com/valujin/amneziawg-installer/v5.14.1/install_amneziawg_en.sh
 sudo bash ./install_amneziawg_en.sh       # Run (+ 2 reboots)
 
 # Installation (Russian)
-wget https://raw.githubusercontent.com/bivlked/amneziawg-installer/v5.14.1/install_amneziawg.sh
+wget https://raw.githubusercontent.com/valujin/amneziawg-installer/v5.14.1/install_amneziawg.sh
 sudo bash ./install_amneziawg.sh          # Run (+ 2 reboots)
 
 # Client management
@@ -440,7 +440,7 @@ For the changelog, see **[CHANGELOG.en.md](CHANGELOG.en.md)**.
 
 <details>
   <summary><strong>Q: Can I use this with AWG 1.x clients?</strong></summary>
-  <b>A:</b> No. AWG 2.0 is not compatible with AWG 1.x. All clients must support the 2.0 protocol. For AWG 1.x, use the <a href="https://github.com/bivlked/amneziawg-installer/tree/legacy/v4">legacy/v4</a> branch.
+  <b>A:</b> No. AWG 2.0 is not compatible with AWG 1.x. All clients must support the 2.0 protocol. For AWG 1.x, use the <a href="https://github.com/valujin/amneziawg-installer/tree/legacy/v4">legacy/v4</a> branch.
 </details>
 
 <details>
@@ -453,13 +453,13 @@ For the changelog, see **[CHANGELOG.en.md](CHANGELOG.en.md)**.
   <b>A:</b> Download the updated scripts and replace them on the server:
   <pre>
   # English version:
-  wget -O /root/awg/manage_amneziawg.sh https://raw.githubusercontent.com/bivlked/amneziawg-installer/v5.14.1/manage_amneziawg_en.sh
-  wget -O /root/awg/awg_common.sh https://raw.githubusercontent.com/bivlked/amneziawg-installer/v5.14.1/awg_common_en.sh
+  wget -O /root/awg/manage_amneziawg.sh https://raw.githubusercontent.com/valujin/amneziawg-installer/v5.14.1/manage_amneziawg_en.sh
+  wget -O /root/awg/awg_common.sh https://raw.githubusercontent.com/valujin/amneziawg-installer/v5.14.1/awg_common_en.sh
   chmod 700 /root/awg/manage_amneziawg.sh /root/awg/awg_common.sh
 
   # Russian version:
-  wget -O /root/awg/manage_amneziawg.sh https://raw.githubusercontent.com/bivlked/amneziawg-installer/v5.14.1/manage_amneziawg.sh
-  wget -O /root/awg/awg_common.sh https://raw.githubusercontent.com/bivlked/amneziawg-installer/v5.14.1/awg_common.sh
+  wget -O /root/awg/manage_amneziawg.sh https://raw.githubusercontent.com/valujin/amneziawg-installer/v5.14.1/manage_amneziawg.sh
+  wget -O /root/awg/awg_common.sh https://raw.githubusercontent.com/valujin/amneziawg-installer/v5.14.1/awg_common.sh
   chmod 700 /root/awg/manage_amneziawg.sh /root/awg/awg_common.sh
   </pre>
   Server reinstallation is not required.
@@ -589,7 +589,7 @@ For the changelog, see **[CHANGELOG.en.md](CHANGELOG.en.md)**.
 <a id="license"></a>
 ## 📝 License & Author
 
-* **Author:** @bivlked - [GitHub](https://github.com/bivlked)
+* **Author:** @valujin - [GitHub](https://github.com/valujin)
 * **License:** MIT — free and open-source (see `LICENSE`)
 
 ---

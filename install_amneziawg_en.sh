@@ -7,10 +7,10 @@ fi
 
 # ==============================================================================
 # AmneziaWG 2.0 installation and configuration script for Ubuntu/Debian servers
-# Author: @bivlked
+# Author: @valujin
 # Version: 5.14.4
 # Date: 2026-05-24
-# Repository: https://github.com/bivlked/amneziawg-installer
+# Repository: https://github.com/valujin/amneziawg-installer
 # ==============================================================================
 
 # --- Safe mode and Constants ---
@@ -24,9 +24,9 @@ LOG_FILE="$AWG_DIR/install_amneziawg.log"
 KEYS_DIR="$AWG_DIR/keys"
 SERVER_CONF_FILE="/etc/amnezia/amneziawg/awg0.conf"
 AWG_BRANCH="${AWG_BRANCH:-v${SCRIPT_VERSION}}"
-COMMON_SCRIPT_URL="https://raw.githubusercontent.com/bivlked/amneziawg-installer/${AWG_BRANCH}/awg_common_en.sh"
+COMMON_SCRIPT_URL="https://raw.githubusercontent.com/valujin/amneziawg-installer/${AWG_BRANCH}/awg_common_en.sh"
 COMMON_SCRIPT_PATH="$AWG_DIR/awg_common.sh"
-MANAGE_SCRIPT_URL="https://raw.githubusercontent.com/bivlked/amneziawg-installer/${AWG_BRANCH}/manage_amneziawg_en.sh"
+MANAGE_SCRIPT_URL="https://raw.githubusercontent.com/valujin/amneziawg-installer/${AWG_BRANCH}/manage_amneziawg_en.sh"
 MANAGE_SCRIPT_PATH="$AWG_DIR/manage_amneziawg.sh"
 
 # SHA256 checksums of downloaded scripts. Updated at each release.
@@ -39,9 +39,11 @@ MANAGE_SCRIPT_SHA256="403ed49484c212264dc3be91623de6099e4bc03b8be67e3963bdd0b155
 # CLI flags
 UNINSTALL=0; HELP=0; DIAGNOSTIC=0; VERBOSE=0; NO_COLOR=0; AUTO_YES=0; NO_TWEAKS=0
 FORCE_REINSTALL=0
+NO_REBOOT=0
 _APT_UPDATED=0
 CLI_PORT=""; CLI_SUBNET=""; CLI_DISABLE_IPV6="default"
 CLI_ROUTING_MODE="default"; CLI_CUSTOM_ROUTES=""; CLI_ENDPOINT=""; CLI_NO_TWEAKS=0
+CLI_CONF=""
 
 # --- Auto-cleanup of temporary files ---
 _install_temp_files=()
@@ -76,6 +78,8 @@ while [[ $# -gt 0 ]]; do
         --jc=*)          CLI_JC="${1#*=}" ;;
         --jmin=*)        CLI_JMIN="${1#*=}" ;;
         --jmax=*)        CLI_JMAX="${1#*=}" ;;
+        --conf=*)        CLI_CONF="${1#*=}" ;;
+        --no-reboot)     NO_REBOOT=1 ;;
         *) echo "Unknown argument: $1"; HELP=1 ;;
     esac
     shift
@@ -270,11 +274,20 @@ Options:
                         (by default a run on a configured server aborts;
                         ENV: AWG_FORCE_REINSTALL=1 is equivalent to the flag)
   --no-tweaks           Skip hardening/optimization (no UFW, Fail2Ban, sysctl tweaks)
-  --preset=TYPE         Obfuscation parameter preset: default, mobile
+  --preset=TYPE         Obfuscation parameter preset: default, mobile, custom-conf
                         mobile: Jc=3, narrow Jmax — for mobile carriers (Tele2, Yota, Megafon)
+                        custom-conf: take ALL obfuscation parameters (Jc/Jmin/Jmax/S1-S4/H1-H4/I1-I5)
+                        from a provided .conf file (see --conf=)
+  --conf=SOURCE         Path to a .conf file with AWG 2.0 parameters for preset=custom-conf.
+                        Accepts a local path, http(s):// URL, or filename in ./conf/ next to
+                        the script. If omitted, the script auto-detects a single ./conf/*.conf.
   --jc=N               Set Jc manually (1-128, overrides preset)
   --jmin=N             Set Jmin manually (0-1280, overrides preset)
   --jmax=N             Set Jmax manually (0-1280, overrides preset, must be >= Jmin)
+  --no-reboot          Install without mandatory reboot: apt full-upgrade is replaced with
+                        `apt upgrade --without-new-pkgs` (so no new kernel is pulled) and
+                        step 2 runs in the same session without rebooting. WARNING: kernel
+                        security patches will NOT be applied — reboot manually later.
 
 Examples:
   sudo bash install_amneziawg_en.sh                             # Interactive installation
@@ -284,7 +297,7 @@ Examples:
   sudo bash install_amneziawg_en.sh --uninstall                 # Uninstall
   sudo bash install_amneziawg_en.sh --diagnostic                # Diagnostics
 
-Repository: https://github.com/bivlked/amneziawg-installer
+Repository: https://github.com/valujin/amneziawg-installer
 EOF
     exit 0
 }
@@ -313,6 +326,15 @@ update_state() {
 request_reboot() {
     local next_step=$1
     update_state "$next_step"
+
+    # --no-reboot: skip reboot and continue installation in the same session.
+    # Safe because step1 in this mode uses apt upgrade --without-new-pkgs
+    # (no new kernel staged), so the boot_id guard in step2 is not needed.
+    if [[ "$NO_REBOOT" -eq 1 ]]; then
+        log "Mode --no-reboot: reboot skipped, continuing with step $next_step"
+        current_step="$next_step"
+        return 0
+    fi
 
     # Capture boot_id before the 1→2 reboot gate. On step 2 entry we
     # compare it with the current boot_id — if they match, the user did
@@ -536,7 +558,7 @@ safe_load_config() {
                 OS_ID|OS_VERSION|OS_CODENAME|AWG_PORT|AWG_TUNNEL_SUBNET|\
                 DISABLE_IPV6|ALLOWED_IPS_MODE|ALLOWED_IPS|AWG_ENDPOINT|AWG_MTU|\
                 AWG_Jc|AWG_Jmin|AWG_Jmax|AWG_S1|AWG_S2|AWG_S3|AWG_S4|\
-                AWG_H1|AWG_H2|AWG_H3|AWG_H4|AWG_I1|AWG_PRESET|NO_TWEAKS|AWG_APPLY_MODE)
+                AWG_H1|AWG_H2|AWG_H3|AWG_H4|AWG_I1|AWG_I2|AWG_I3|AWG_I4|AWG_I5|AWG_PRESET|NO_TWEAKS|AWG_APPLY_MODE)
                     export "$key=$value"
                     ;;
             esac
@@ -655,14 +677,14 @@ configure_routing_mode() {
     else
         echo ""
         log "Select routing mode (client AllowedIPs):"
-        echo "  1) All traffic (0.0.0.0/0) - Max privacy, may block LAN"
+        echo "  1) All traffic (0.0.0.0/0, ::/0) - Max privacy, may block LAN"
         echo "  2) Amnezia List+DNS (default) - Recommended for bypassing restrictions"
         echo "  3) Only specified networks (Split Tunneling)"
         read -rp "Your choice [2]: " r_mode < /dev/tty
         ALLOWED_IPS_MODE=${r_mode:-2}
     fi
     case "$ALLOWED_IPS_MODE" in
-        1) ALLOWED_IPS="0.0.0.0/0"
+        1) ALLOWED_IPS="0.0.0.0/0, ::/0"
            log "Selected mode: All traffic." ;;
         3) if [[ -z "$CLI_CUSTOM_ROUTES" ]]; then
                read -rp "Enter networks (a.b.c.d/xx,...): " ALLOWED_IPS < /dev/tty
@@ -678,7 +700,7 @@ configure_routing_mode() {
            fi
            log "Selected mode: Custom ($ALLOWED_IPS)" ;;
         *) ALLOWED_IPS_MODE=2
-           ALLOWED_IPS="0.0.0.0/5, 8.0.0.0/7, 11.0.0.0/8, 12.0.0.0/6, 16.0.0.0/4, 32.0.0.0/3, 64.0.0.0/2, 128.0.0.0/3, 160.0.0.0/5, 168.0.0.0/6, 172.0.0.0/12, 172.32.0.0/11, 172.64.0.0/10, 172.128.0.0/9, 173.0.0.0/8, 174.0.0.0/7, 176.0.0.0/4, 192.0.0.0/9, 192.128.0.0/11, 192.160.0.0/13, 192.169.0.0/16, 192.170.0.0/15, 192.172.0.0/14, 192.176.0.0/12, 192.192.0.0/10, 193.0.0.0/8, 194.0.0.0/7, 196.0.0.0/6, 200.0.0.0/5, 208.0.0.0/4, 8.8.8.8/32, 1.1.1.1/32"
+           ALLOWED_IPS="0.0.0.0/5, 8.0.0.0/7, 11.0.0.0/8, 12.0.0.0/6, 16.0.0.0/4, 32.0.0.0/3, 64.0.0.0/2, 128.0.0.0/3, 160.0.0.0/5, 168.0.0.0/6, 172.0.0.0/12, 172.32.0.0/11, 172.64.0.0/10, 172.128.0.0/9, 173.0.0.0/8, 174.0.0.0/7, 176.0.0.0/4, 192.0.0.0/9, 192.128.0.0/11, 192.160.0.0/13, 192.169.0.0/16, 192.170.0.0/15, 192.172.0.0/14, 192.176.0.0/12, 192.192.0.0/10, 193.0.0.0/8, 194.0.0.0/7, 196.0.0.0/6, 200.0.0.0/5, 208.0.0.0/4, 8.8.8.8/32, 1.1.1.1/32, ::/0"
            log "Selected mode: Amnezia List+DNS." ;;
     esac
     if [ -z "$ALLOWED_IPS" ]; then die "Failed to determine AllowedIPs."; fi
@@ -771,10 +793,122 @@ generate_cps_i1() {
     echo "<r ${n}>"
 }
 
+# Resolve custom-conf source: local file, http(s) URL, or filename in
+# ./conf/ next to the script. Prints resolved local path on stdout.
+_resolve_custom_conf_source() {
+    local src="${CLI_CONF:-}"
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || script_dir="."
+
+    if [[ -z "$src" ]]; then
+        local candidates=()
+        if [[ -d "$script_dir/conf" ]]; then
+            while IFS= read -r -d '' f; do candidates+=("$f"); done < <(find "$script_dir/conf" -maxdepth 1 -type f -name '*.conf' -print0 2>/dev/null)
+        fi
+        if [[ ${#candidates[@]} -eq 1 ]]; then
+            echo "${candidates[0]}"
+            return 0
+        elif [[ ${#candidates[@]} -gt 1 ]]; then
+            log_error "Multiple *.conf files found in $script_dir/conf/. Specify one explicitly: --conf=<filename>."
+            return 1
+        else
+            log_error "--preset=custom-conf requires --conf=<path|URL|name in ./conf/>. Nothing found."
+            return 1
+        fi
+    fi
+
+    if [[ "$src" =~ ^https?:// ]]; then
+        local tmp
+        tmp=$(mktemp /tmp/awg-custom-conf-XXXXXX.conf) || { log_error "mktemp error"; return 1; }
+        _install_temp_files+=("$tmp")
+        if ! curl -fsSL --retry 2 --connect-timeout 10 --max-time 30 -o "$tmp" "$src"; then
+            log_error "Failed to download custom-conf: $src"
+            return 1
+        fi
+        echo "$tmp"
+        return 0
+    fi
+
+    if [[ -f "$src" ]]; then
+        echo "$src"
+        return 0
+    fi
+
+    if [[ -f "$script_dir/conf/$src" ]]; then
+        echo "$script_dir/conf/$src"
+        return 0
+    fi
+
+    log_error "custom-conf source not found: $src"
+    return 1
+}
+
+# Parse a .conf file ([Interface] AmneziaWG format): extract
+# Jc/Jmin/Jmax/S1-S4/H1-H4/I1-I5 and assign AWG_* variables (atomic on
+# required fields). The [Interface] header and I1-I5 are optional.
+_parse_custom_conf() {
+    local conf="$1"
+    [[ -f "$conf" ]] || { log_error "custom-conf file not readable: $conf"; return 1; }
+
+    local _Jc="" _Jmin="" _Jmax=""
+    local _S1="" _S2="" _S3="" _S4=""
+    local _H1="" _H2="" _H3="" _H4=""
+    local _I1="" _I2="" _I3="" _I4="" _I5=""
+    local in_iface=1 line key value
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ "$line" =~ ^\[Interface\] ]]; then in_iface=1; continue; fi
+        if [[ "$line" =~ ^\[ ]]; then in_iface=0; continue; fi
+        (( in_iface )) || continue
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "${line// /}" ]] && continue
+
+        if [[ "$line" =~ ^[[:space:]]*([A-Za-z0-9]+)[[:space:]]*=[[:space:]]*(.+)$ ]]; then
+            key="${BASH_REMATCH[1]}"
+            value="${BASH_REMATCH[2]}"
+            value="${value%"${value##*[![:space:]]}"}"
+            case "$key" in
+                Jc)   _Jc="$value" ;;
+                Jmin) _Jmin="$value" ;;
+                Jmax) _Jmax="$value" ;;
+                S1)   _S1="$value" ;;
+                S2)   _S2="$value" ;;
+                S3)   _S3="$value" ;;
+                S4)   _S4="$value" ;;
+                H1)   _H1="$value" ;;
+                H2)   _H2="$value" ;;
+                H3)   _H3="$value" ;;
+                H4)   _H4="$value" ;;
+                I1)   _I1="$value" ;;
+                I2)   _I2="$value" ;;
+                I3)   _I3="$value" ;;
+                I4)   _I4="$value" ;;
+                I5)   _I5="$value" ;;
+            esac
+        fi
+    done < "$conf"
+
+    [[ -n "$_Jc" && -n "$_Jmin" && -n "$_Jmax" && \
+       -n "$_S1" && -n "$_S2" && -n "$_S3" && -n "$_S4" && \
+       -n "$_H1" && -n "$_H2" && -n "$_H3" && -n "$_H4" ]] || {
+        log_error "custom-conf missing required parameters (Jc/Jmin/Jmax/S1-S4/H1-H4): $conf"
+        return 1
+    }
+
+    AWG_Jc="$_Jc"; AWG_Jmin="$_Jmin"; AWG_Jmax="$_Jmax"
+    AWG_S1="$_S1"; AWG_S2="$_S2"; AWG_S3="$_S3"; AWG_S4="$_S4"
+    AWG_H1="$_H1"; AWG_H2="$_H2"; AWG_H3="$_H3"; AWG_H4="$_H4"
+    AWG_I1="$_I1"; AWG_I2="$_I2"; AWG_I3="$_I3"; AWG_I4="$_I4"; AWG_I5="$_I5"
+    return 0
+}
+
 # Generate all AWG 2.0 parameters
 generate_awg_params() {
     local preset="${CLI_PRESET:-default}"
     log "Generating AWG 2.0 parameters (preset: $preset)..."
+
+    # I2-I5 are cleared by default — only custom-conf populates them.
+    AWG_I2=""; AWG_I3=""; AWG_I4=""; AWG_I5=""
 
     case "$preset" in
         default)
@@ -792,8 +926,14 @@ generate_awg_params() {
             AWG_Jmax=$(( AWG_Jmin + $(rand_range 20 80) ))
             log "  Preset 'mobile': Jc=3, narrow Jmax for mobile networks"
             ;;
+        custom-conf)
+            local src_conf
+            src_conf=$(_resolve_custom_conf_source) || die "custom-conf: could not resolve source (--conf=)."
+            log "  Preset 'custom-conf': loading parameters from $src_conf"
+            _parse_custom_conf "$src_conf" || die "custom-conf: failed to parse $src_conf"
+            ;;
         *)
-            die "Unknown preset: '$preset'. Allowed: default, mobile"
+            die "Unknown preset: '$preset'. Allowed: default, mobile, custom-conf"
             ;;
     esac
 
@@ -817,37 +957,42 @@ generate_awg_params() {
     fi
 
     AWG_PRESET="$preset"
-    AWG_S1=$(rand_range 15 150)
-    AWG_S2=$(rand_range 15 150)
 
-    # Critical kernel constraint: S1+56 != S2
-    # Prevents init and response messages from having the same size
-    while [[ $((AWG_S1 + 56)) -eq $AWG_S2 ]]; do
+    if [[ "$preset" != "custom-conf" ]]; then
+        AWG_S1=$(rand_range 15 150)
         AWG_S2=$(rand_range 15 150)
-    done
 
-    AWG_S3=$(rand_range 8 55)
-    AWG_S4=$(rand_range 4 27)
+        # Critical kernel constraint: S1+56 != S2
+        # Prevents init and response messages from having the same size
+        while [[ $((AWG_S1 + 56)) -eq $AWG_S2 ]]; do
+            AWG_S2=$(rand_range 15 150)
+        done
 
-    # H1-H4: 4 random non-overlapping uint32 ranges.
-    # Per-install randomization protects against Russian DPI fingerprinting
-    # of static H values (Discussion #38, elvaleto/Klavishnik).
-    # Algorithm: 8 random uint32 → sort → 4 non-overlapping pairs.
-    local _h_lines
-    mapfile -t _h_lines < <(generate_awg_h_ranges) || true
-    if [[ ${#_h_lines[@]} -ne 4 ]]; then
-        die "Failed to generate H1-H4 ranges."
+        AWG_S3=$(rand_range 8 55)
+        AWG_S4=$(rand_range 4 27)
+
+        # H1-H4: 4 random non-overlapping uint32 ranges.
+        # Per-install randomization protects against Russian DPI fingerprinting
+        # of static H values (Discussion #38, elvaleto/Klavishnik).
+        # Algorithm: 8 random uint32 → sort → 4 non-overlapping pairs.
+        local _h_lines
+        mapfile -t _h_lines < <(generate_awg_h_ranges) || true
+        if [[ ${#_h_lines[@]} -ne 4 ]]; then
+            die "Failed to generate H1-H4 ranges."
+        fi
+        AWG_H1="${_h_lines[0]}"
+        AWG_H2="${_h_lines[1]}"
+        AWG_H3="${_h_lines[2]}"
+        AWG_H4="${_h_lines[3]}"
+
+        # I1: CPS concealment
+        AWG_I1=$(generate_cps_i1)
+    else
+        log "  custom-conf: S1-S4, H1-H4, I1-I5 taken from conf (randomization skipped)."
     fi
-    AWG_H1="${_h_lines[0]}"
-    AWG_H2="${_h_lines[1]}"
-    AWG_H3="${_h_lines[2]}"
-    AWG_H4="${_h_lines[3]}"
-
-    # I1: CPS concealment
-    AWG_I1=$(generate_cps_i1)
 
     export AWG_Jc AWG_Jmin AWG_Jmax AWG_S1 AWG_S2 AWG_S3 AWG_S4 AWG_PRESET
-    export AWG_H1 AWG_H2 AWG_H3 AWG_H4 AWG_I1
+    export AWG_H1 AWG_H2 AWG_H3 AWG_H4 AWG_I1 AWG_I2 AWG_I3 AWG_I4 AWG_I5
 
     log "  Jc=$AWG_Jc, Jmin=$AWG_Jmin, Jmax=$AWG_Jmax"
     log "  S1=$AWG_S1, S2=$AWG_S2, S3=$AWG_S3, S4=$AWG_S4"
@@ -855,7 +1000,11 @@ generate_awg_params() {
     log "  H2=$AWG_H2"
     log "  H3=$AWG_H3"
     log "  H4=$AWG_H4"
-    log "  I1=$AWG_I1"
+    [[ -n "${AWG_I1}" ]] && log "  I1=$AWG_I1"
+    [[ -n "${AWG_I2}" ]] && log "  I2=$AWG_I2"
+    [[ -n "${AWG_I3}" ]] && log "  I3=$AWG_I3"
+    [[ -n "${AWG_I4}" ]] && log "  I4=$AWG_I4"
+    [[ -n "${AWG_I5}" ]] && log "  I5=$AWG_I5"
     log "AWG 2.0 parameters generated."
 }
 
@@ -1805,6 +1954,10 @@ export AWG_H2='${AWG_H2}'
 export AWG_H3='${AWG_H3}'
 export AWG_H4='${AWG_H4}'
 export AWG_I1='${AWG_I1}'
+export AWG_I2='${AWG_I2}'
+export AWG_I3='${AWG_I3}'
+export AWG_I4='${AWG_I4}'
+export AWG_I5='${AWG_I5}'
 export AWG_PRESET='${AWG_PRESET:-default}'
 export NO_TWEAKS=${NO_TWEAKS}
 export AWG_APPLY_MODE='${AWG_APPLY_MODE:-syncconf}'
@@ -1863,9 +2016,19 @@ step1_update_and_optimize() {
         DEBIAN_FRONTEND=noninteractive dpkg --configure -a || log_warn "dpkg --configure -a."
     fi
 
-    log "Updating system..."
-    DEBIAN_FRONTEND=noninteractive apt full-upgrade -y || die "apt full-upgrade error."
-    log "System updated."
+    if [[ "$NO_REBOOT" -eq 1 ]]; then
+        # --no-reboot: upgrade without pulling new packages (incl. kernel).
+        # Avoids requiring a reboot, but kernel security patches are NOT
+        # applied until a manual reboot.
+        log "Updating system (--no-reboot: no new packages or kernel)..."
+        DEBIAN_FRONTEND=noninteractive apt-get upgrade --without-new-pkgs -y \
+            || die "apt upgrade --without-new-pkgs error."
+        log "System updated (new kernel deferred until manual reboot)."
+    else
+        log "Updating system..."
+        DEBIAN_FRONTEND=noninteractive apt full-upgrade -y || die "apt full-upgrade error."
+        log "System updated."
+    fi
 
     install_packages curl wget gpg sudo ethtool
 
@@ -1926,7 +2089,7 @@ _try_install_prebuilt_arm() {
 
     # Asset filename encodes the exact kernel version
     asset_name="amneziawg-kmod-${target_id}_${kernel}_${arch}.deb"
-    asset_url="https://github.com/bivlked/amneziawg-installer/releases/download/arm-packages/${asset_name}"
+    asset_url="https://github.com/valujin/amneziawg-installer/releases/download/arm-packages/${asset_name}"
 
     log "Trying prebuilt: $asset_name"
     tmpfile="$(mktemp /tmp/amneziawg-prebuilt-XXXXXX.deb)"
@@ -2145,7 +2308,7 @@ PPASRC
         log_error "ppa.launchpadcontent.net appears to be down — this is a"
         log_error "Launchpad infrastructure outage, not a script bug."
         log_error "Wait 10–15 minutes and re-run the script with the same args."
-        log_error "Details: https://github.com/bivlked/amneziawg-installer/issues/68"
+        log_error "Details: https://github.com/valujin/amneziawg-installer/issues/68"
         die "Amnezia PPA is temporarily unavailable."
     fi
 
@@ -2491,7 +2654,7 @@ AWG_LOGROTATE_EOF
     cat > "$_stage_unit" <<'AWG_SYSTEMD_UNIT_EOF'
 [Unit]
 Description=Ensure amneziawg kernel module is built and loaded
-Documentation=https://github.com/bivlked/amneziawg-installer
+Documentation=https://github.com/valujin/amneziawg-installer
 Before=awg-quick@awg0.service
 After=systemd-modules-load.service local-fs.target
 ConditionPathExists=/usr/local/sbin/amneziawg-ensure-module

@@ -111,12 +111,12 @@ sudo apt install minisign           # Ubuntu/Debian
 brew install minisign                # macOS
 
 # 2. Fetch the public key from the repository (one time):
-curl -O https://raw.githubusercontent.com/bivlked/amneziawg-installer/main/KEYS.txt
+curl -O https://raw.githubusercontent.com/valujin/amneziawg-installer/main/KEYS.txt
 
 # 3. Fetch the installer + signature:
 TAG=v5.14.0
-curl -LO "https://github.com/bivlked/amneziawg-installer/releases/download/$TAG/install_amneziawg_en.sh"
-curl -LO "https://github.com/bivlked/amneziawg-installer/releases/download/$TAG/install_amneziawg_en.sh.minisig"
+curl -LO "https://github.com/valujin/amneziawg-installer/releases/download/$TAG/install_amneziawg_en.sh"
+curl -LO "https://github.com/valujin/amneziawg-installer/releases/download/$TAG/install_amneziawg_en.sh.minisig"
 
 # 4. Verify:
 minisign -V -p KEYS.txt -m install_amneziawg_en.sh -x install_amneziawg_en.sh.minisig

@@ -7,10 +7,10 @@ fi
 
 # ==============================================================================
 # AmneziaWG 2.0 peer management script
-# Author: @bivlked
+# Author: @valujin
 # Version: 5.14.4
 # Date: 2026-05-24
-# Repository: https://github.com/bivlked/amneziawg-installer
+# Repository: https://github.com/valujin/amneziawg-installer
 # ==============================================================================
 
 # --- Safe mode and Constants ---

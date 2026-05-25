@@ -7,10 +7,10 @@ fi
 
 # ==============================================================================
 # Скрипт для установки и настройки AmneziaWG 2.0 на Ubuntu/Debian серверах
-# Автор: @bivlked
+# Автор: @valujin
 # Версия: 5.14.4
 # Дата: 2026-05-24
-# Репозиторий: https://github.com/bivlked/amneziawg-installer
+# Репозиторий: https://github.com/valujin/amneziawg-installer
 # ==============================================================================
 
 # --- Безопасный режим и Константы ---
@@ -24,9 +24,9 @@ LOG_FILE="$AWG_DIR/install_amneziawg.log"
 KEYS_DIR="$AWG_DIR/keys"
 SERVER_CONF_FILE="/etc/amnezia/amneziawg/awg0.conf"
 AWG_BRANCH="${AWG_BRANCH:-v${SCRIPT_VERSION}}"
-COMMON_SCRIPT_URL="https://raw.githubusercontent.com/bivlked/amneziawg-installer/${AWG_BRANCH}/awg_common.sh"
+COMMON_SCRIPT_URL="https://raw.githubusercontent.com/valujin/amneziawg-installer/${AWG_BRANCH}/awg_common.sh"
 COMMON_SCRIPT_PATH="$AWG_DIR/awg_common.sh"
-MANAGE_SCRIPT_URL="https://raw.githubusercontent.com/bivlked/amneziawg-installer/${AWG_BRANCH}/manage_amneziawg.sh"
+MANAGE_SCRIPT_URL="https://raw.githubusercontent.com/valujin/amneziawg-installer/${AWG_BRANCH}/manage_amneziawg.sh"
 MANAGE_SCRIPT_PATH="$AWG_DIR/manage_amneziawg.sh"
 
 # SHA256 checksums скачиваемых скриптов. Обновляются при каждом релизе.
@@ -39,9 +39,11 @@ MANAGE_SCRIPT_SHA256="a2cb19b14a494033db3205539f8f3f0c107b5fe44e40635c98d88ff74c
 # Флаги CLI
 UNINSTALL=0; HELP=0; DIAGNOSTIC=0; VERBOSE=0; NO_COLOR=0; AUTO_YES=0; NO_TWEAKS=0
 FORCE_REINSTALL=0
+NO_REBOOT=0
 _APT_UPDATED=0
 CLI_PORT=""; CLI_SUBNET=""; CLI_DISABLE_IPV6="default"
 CLI_ROUTING_MODE="default"; CLI_CUSTOM_ROUTES=""; CLI_ENDPOINT=""; CLI_NO_TWEAKS=0
+CLI_CONF=""
 
 # --- Автоочистка временных файлов ---
 _install_temp_files=()
@@ -76,6 +78,8 @@ while [[ $# -gt 0 ]]; do
         --jc=*)          CLI_JC="${1#*=}" ;;
         --jmin=*)        CLI_JMIN="${1#*=}" ;;
         --jmax=*)        CLI_JMAX="${1#*=}" ;;
+        --conf=*)        CLI_CONF="${1#*=}" ;;
+        --no-reboot)     NO_REBOOT=1 ;;
         *) echo "Неизвестный аргумент: $1"; HELP=1 ;;
     esac
     shift
@@ -267,11 +271,22 @@ show_help() {
                         (по умолчанию запуск на сконфигурированном сервере прерывается;
                         ENV: AWG_FORCE_REINSTALL=1 эквивалентен флагу)
   --no-tweaks           Пропустить hardening/оптимизацию (без UFW, Fail2Ban, sysctl tweaks)
-  --preset=ТИП          Набор параметров обфускации: default, mobile
+  --preset=ТИП          Набор параметров обфускации: default, mobile, custom-conf
                         mobile: Jc=3, узкий Jmax — для мобильных операторов (Tele2, Yota, Megafon)
+                        custom-conf: брать ВСЕ параметры обфускации (Jc/Jmin/Jmax/S1-S4/H1-H4/I1-I5)
+                        из заданного .conf файла (см. --conf=)
+  --conf=ИСТОЧНИК      Путь к .conf файлу с параметрами AWG 2.0 для preset=custom-conf.
+                        Принимает локальный путь, http(s):// URL или имя файла из ./conf/
+                        рядом со скриптом. Если не задан — автоматически ищется один файл
+                        в ./conf/*.conf.
   --jc=N               Задать Jc вручную (1-128, поверх preset)
   --jmin=N             Задать Jmin вручную (0-1280, поверх preset)
   --jmax=N             Задать Jmax вручную (0-1280, поверх preset, должно быть >= Jmin)
+  --no-reboot          Установка без обязательной перезагрузки: будет пропущен apt full-upgrade
+                        (используется `apt upgrade --without-new-pkgs`, чтобы не подтянуть
+                        новое ядро) и шаг 2 запустится в той же сессии без reboot.
+                        ВНИМАНИЕ: security-патчи ядра при этом не применяются — перезагрузите
+                        систему позже самостоятельно.
 
 Примеры:
   sudo bash install_amneziawg.sh                             # Интерактивная установка
@@ -281,7 +296,7 @@ show_help() {
   sudo bash install_amneziawg.sh --uninstall                 # Удаление
   sudo bash install_amneziawg.sh --diagnostic                # Диагностика
 
-Репозиторий: https://github.com/bivlked/amneziawg-installer
+Репозиторий: https://github.com/valujin/amneziawg-installer
 EOF
     exit 0
 }
@@ -310,6 +325,16 @@ update_state() {
 request_reboot() {
     local next_step=$1
     update_state "$next_step"
+
+    # --no-reboot: пропускаем перезагрузку, продолжаем установку в той же сессии.
+    # Это безопасно потому что step1 в этом режиме использует apt upgrade
+    # --without-new-pkgs (не тянет новое ядро), поэтому boot_id-страж в step2
+    # не нужен.
+    if [[ "$NO_REBOOT" -eq 1 ]]; then
+        log "Режим --no-reboot: перезагрузка пропущена, продолжаем с шагом $next_step"
+        current_step="$next_step"
+        return 0
+    fi
 
     # Перед reboot-gate 1→2 сохраняем boot_id. На входе step 2
     # сравниваем с текущим — если совпадает, reboot не произошёл
@@ -531,7 +556,7 @@ safe_load_config() {
                 OS_ID|OS_VERSION|OS_CODENAME|AWG_PORT|AWG_TUNNEL_SUBNET|\
                 DISABLE_IPV6|ALLOWED_IPS_MODE|ALLOWED_IPS|AWG_ENDPOINT|AWG_MTU|\
                 AWG_Jc|AWG_Jmin|AWG_Jmax|AWG_S1|AWG_S2|AWG_S3|AWG_S4|\
-                AWG_H1|AWG_H2|AWG_H3|AWG_H4|AWG_I1|AWG_PRESET|NO_TWEAKS|AWG_APPLY_MODE)
+                AWG_H1|AWG_H2|AWG_H3|AWG_H4|AWG_I1|AWG_I2|AWG_I3|AWG_I4|AWG_I5|AWG_PRESET|NO_TWEAKS|AWG_APPLY_MODE)
                     export "$key=$value"
                     ;;
             esac
@@ -650,14 +675,14 @@ configure_routing_mode() {
     else
         echo ""
         log "Выберите режим маршрутизации (AllowedIPs клиента):"
-        echo "  1) Весь трафик (0.0.0.0/0) - Макс. приватность, может блокировать LAN"
+        echo "  1) Весь трафик (0.0.0.0/0, ::/0) - Макс. приватность, может блокировать LAN"
         echo "  2) Список Amnezia+DNS (умолч.) - Рекомендуется для обхода блокировок"
         echo "  3) Только указанные сети (Split Tunneling)"
         read -rp "Ваш выбор [2]: " r_mode < /dev/tty
         ALLOWED_IPS_MODE=${r_mode:-2}
     fi
     case "$ALLOWED_IPS_MODE" in
-        1) ALLOWED_IPS="0.0.0.0/0"
+        1) ALLOWED_IPS="0.0.0.0/0, ::/0"
            log "Выбран режим: Весь трафик." ;;
         3) if [[ -z "$CLI_CUSTOM_ROUTES" ]]; then
                read -rp "Введите сети (a.b.c.d/xx,...): " ALLOWED_IPS < /dev/tty
@@ -673,7 +698,7 @@ configure_routing_mode() {
            fi
            log "Выбран режим: Пользовательский ($ALLOWED_IPS)" ;;
         *) ALLOWED_IPS_MODE=2
-           ALLOWED_IPS="0.0.0.0/5, 8.0.0.0/7, 11.0.0.0/8, 12.0.0.0/6, 16.0.0.0/4, 32.0.0.0/3, 64.0.0.0/2, 128.0.0.0/3, 160.0.0.0/5, 168.0.0.0/6, 172.0.0.0/12, 172.32.0.0/11, 172.64.0.0/10, 172.128.0.0/9, 173.0.0.0/8, 174.0.0.0/7, 176.0.0.0/4, 192.0.0.0/9, 192.128.0.0/11, 192.160.0.0/13, 192.169.0.0/16, 192.170.0.0/15, 192.172.0.0/14, 192.176.0.0/12, 192.192.0.0/10, 193.0.0.0/8, 194.0.0.0/7, 196.0.0.0/6, 200.0.0.0/5, 208.0.0.0/4, 8.8.8.8/32, 1.1.1.1/32"
+           ALLOWED_IPS="0.0.0.0/5, 8.0.0.0/7, 11.0.0.0/8, 12.0.0.0/6, 16.0.0.0/4, 32.0.0.0/3, 64.0.0.0/2, 128.0.0.0/3, 160.0.0.0/5, 168.0.0.0/6, 172.0.0.0/12, 172.32.0.0/11, 172.64.0.0/10, 172.128.0.0/9, 173.0.0.0/8, 174.0.0.0/7, 176.0.0.0/4, 192.0.0.0/9, 192.128.0.0/11, 192.160.0.0/13, 192.169.0.0/16, 192.170.0.0/15, 192.172.0.0/14, 192.176.0.0/12, 192.192.0.0/10, 193.0.0.0/8, 194.0.0.0/7, 196.0.0.0/6, 200.0.0.0/5, 208.0.0.0/4, 8.8.8.8/32, 1.1.1.1/32, ::/0"
            log "Выбран режим: Список Amnezia+DNS." ;;
     esac
     if [ -z "$ALLOWED_IPS" ]; then die "Не удалось определить AllowedIPs."; fi
@@ -766,11 +791,128 @@ generate_cps_i1() {
     echo "<r ${n}>"
 }
 
+# Разрешение источника custom-conf: локальный файл, http(s) URL
+# или файл из ./conf/ рядом с появившимся скриптом.
+# Печатает в stdout путь к готовому локальному файлу (возможно временному).
+_resolve_custom_conf_source() {
+    local src="${CLI_CONF:-}"
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || script_dir="."
+
+    if [[ -z "$src" ]]; then
+        # Авто-детект: ровно один *.conf в ./conf/
+        local candidates=()
+        if [[ -d "$script_dir/conf" ]]; then
+            while IFS= read -r -d '' f; do candidates+=("$f"); done < <(find "$script_dir/conf" -maxdepth 1 -type f -name '*.conf' -print0 2>/dev/null)
+        fi
+        if [[ ${#candidates[@]} -eq 1 ]]; then
+            echo "${candidates[0]}"
+            return 0
+        elif [[ ${#candidates[@]} -gt 1 ]]; then
+            log_error "В $script_dir/conf/ найдено несколько *.conf файлов. Укажите явно: --conf=<имя файла>."
+            return 1
+        else
+            log_error "--preset=custom-conf требует --conf=<путь|URL|имя из ./conf/>. Ничего не найдено."
+            return 1
+        fi
+    fi
+
+    # http(s) URL
+    if [[ "$src" =~ ^https?:// ]]; then
+        local tmp
+        tmp=$(mktemp /tmp/awg-custom-conf-XXXXXX.conf) || { log_error "mktemp ошибка"; return 1; }
+        _install_temp_files+=("$tmp")
+        if ! curl -fsSL --retry 2 --connect-timeout 10 --max-time 30 -o "$tmp" "$src"; then
+            log_error "Не удалось скачать custom-conf: $src"
+            return 1
+        fi
+        echo "$tmp"
+        return 0
+    fi
+
+    # Локальный путь (абсолютный/относительный)
+    if [[ -f "$src" ]]; then
+        echo "$src"
+        return 0
+    fi
+
+    # Имя файла из ./conf/
+    if [[ -f "$script_dir/conf/$src" ]]; then
+        echo "$script_dir/conf/$src"
+        return 0
+    fi
+
+    log_error "Источник custom-conf не найден: $src"
+    return 1
+}
+
+# Парсер .conf файла (формат [Interface] AmneziaWG): вытягивает
+# Jc/Jmin/Jmax/S1-S4/H1-H4/I1-I5 и экспортирует в AWG_* (атомарно по
+# обязательным полям). I1-I5 и заголовок [Interface] опциональны.
+_parse_custom_conf() {
+    local conf="$1"
+    [[ -f "$conf" ]] || { log_error "Файл custom-conf не читается: $conf"; return 1; }
+
+    local _Jc="" _Jmin="" _Jmax=""
+    local _S1="" _S2="" _S3="" _S4=""
+    local _H1="" _H2="" _H3="" _H4=""
+    local _I1="" _I2="" _I3="" _I4="" _I5=""
+    local in_iface=1 line key value seen_iface=0
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ "$line" =~ ^\[Interface\] ]]; then in_iface=1; seen_iface=1; continue; fi
+        if [[ "$line" =~ ^\[ ]]; then in_iface=0; continue; fi
+        (( in_iface )) || continue
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "${line// /}" ]] && continue
+
+        if [[ "$line" =~ ^[[:space:]]*([A-Za-z0-9]+)[[:space:]]*=[[:space:]]*(.+)$ ]]; then
+            key="${BASH_REMATCH[1]}"
+            value="${BASH_REMATCH[2]}"
+            value="${value%"${value##*[![:space:]]}"}"
+            case "$key" in
+                Jc)   _Jc="$value" ;;
+                Jmin) _Jmin="$value" ;;
+                Jmax) _Jmax="$value" ;;
+                S1)   _S1="$value" ;;
+                S2)   _S2="$value" ;;
+                S3)   _S3="$value" ;;
+                S4)   _S4="$value" ;;
+                H1)   _H1="$value" ;;
+                H2)   _H2="$value" ;;
+                H3)   _H3="$value" ;;
+                H4)   _H4="$value" ;;
+                I1)   _I1="$value" ;;
+                I2)   _I2="$value" ;;
+                I3)   _I3="$value" ;;
+                I4)   _I4="$value" ;;
+                I5)   _I5="$value" ;;
+            esac
+        fi
+    done < "$conf"
+
+    [[ -n "$_Jc" && -n "$_Jmin" && -n "$_Jmax" && \
+       -n "$_S1" && -n "$_S2" && -n "$_S3" && -n "$_S4" && \
+       -n "$_H1" && -n "$_H2" && -n "$_H3" && -n "$_H4" ]] || {
+        log_error "В custom-conf отсутствуют обязательные параметры (Jc/Jmin/Jmax/S1-S4/H1-H4): $conf"
+        return 1
+    }
+
+    AWG_Jc="$_Jc"; AWG_Jmin="$_Jmin"; AWG_Jmax="$_Jmax"
+    AWG_S1="$_S1"; AWG_S2="$_S2"; AWG_S3="$_S3"; AWG_S4="$_S4"
+    AWG_H1="$_H1"; AWG_H2="$_H2"; AWG_H3="$_H3"; AWG_H4="$_H4"
+    AWG_I1="$_I1"; AWG_I2="$_I2"; AWG_I3="$_I3"; AWG_I4="$_I4"; AWG_I5="$_I5"
+    return 0
+}
+
 # Генерация всех AWG 2.0 параметров
-# Поддерживает --preset=default|mobile и точечные --jc/--jmin/--jmax overrides
+# Поддерживает --preset=default|mobile|custom-conf и точечные --jc/--jmin/--jmax overrides
 generate_awg_params() {
     local preset="${CLI_PRESET:-default}"
     log "Генерация параметров AWG 2.0 (preset: $preset)..."
+
+    # По умолчанию I2-I5 очищаются — их выставляет только custom-conf.
+    AWG_I2=""; AWG_I3=""; AWG_I4=""; AWG_I5=""
 
     case "$preset" in
         default)
@@ -788,8 +930,14 @@ generate_awg_params() {
             AWG_Jmax=$(( AWG_Jmin + $(rand_range 20 80) ))
             log "  Preset 'mobile': Jc=3, узкий Jmax для мобильных сетей"
             ;;
+        custom-conf)
+            local src_conf
+            src_conf=$(_resolve_custom_conf_source) || die "custom-conf: не удалось разрешить источник (--conf=)."
+            log "  Preset 'custom-conf': загрузка параметров из $src_conf"
+            _parse_custom_conf "$src_conf" || die "custom-conf: ошибка парсинга $src_conf"
+            ;;
         *)
-            die "Неизвестный preset: '$preset'. Допустимые: default, mobile"
+            die "Неизвестный preset: '$preset'. Допустимые: default, mobile, custom-conf"
             ;;
     esac
 
@@ -813,37 +961,42 @@ generate_awg_params() {
     fi
 
     AWG_PRESET="$preset"
-    AWG_S1=$(rand_range 15 150)
-    AWG_S2=$(rand_range 15 150)
 
-    # Критическое ограничение из kernel: S1+56 != S2
-    # Предотвращает одинаковый размер init и response сообщений
-    while [[ $((AWG_S1 + 56)) -eq $AWG_S2 ]]; do
+    if [[ "$preset" != "custom-conf" ]]; then
+        AWG_S1=$(rand_range 15 150)
         AWG_S2=$(rand_range 15 150)
-    done
 
-    AWG_S3=$(rand_range 8 55)
-    AWG_S4=$(rand_range 4 27)
+        # Критическое ограничение из kernel: S1+56 != S2
+        # Предотвращает одинаковый размер init и response сообщений
+        while [[ $((AWG_S1 + 56)) -eq $AWG_S2 ]]; do
+            AWG_S2=$(rand_range 15 150)
+        done
 
-    # H1-H4: 4 случайных непересекающихся uint32 диапазона.
-    # Рандомизация на каждую установку защищает от ТСПУ-фингерпринта
-    # по статическим H-значениям (Discussion #38, elvaleto/Klavishnik).
-    # Алгоритм: 8 случайных uint32 → sort → 4 непересекающиеся пары.
-    local _h_lines
-    mapfile -t _h_lines < <(generate_awg_h_ranges) || true
-    if [[ ${#_h_lines[@]} -ne 4 ]]; then
-        die "Не удалось сгенерировать H1-H4 диапазоны."
+        AWG_S3=$(rand_range 8 55)
+        AWG_S4=$(rand_range 4 27)
+
+        # H1-H4: 4 случайных непересекающихся uint32 диапазона.
+        # Рандомизация на каждую установку защищает от ТСПУ-фингерпринта
+        # по статическим H-значениям (Discussion #38, elvaleto/Klavishnik).
+        # Алгоритм: 8 случайных uint32 → sort → 4 непересекающиеся пары.
+        local _h_lines
+        mapfile -t _h_lines < <(generate_awg_h_ranges) || true
+        if [[ ${#_h_lines[@]} -ne 4 ]]; then
+            die "Не удалось сгенерировать H1-H4 диапазоны."
+        fi
+        AWG_H1="${_h_lines[0]}"
+        AWG_H2="${_h_lines[1]}"
+        AWG_H3="${_h_lines[2]}"
+        AWG_H4="${_h_lines[3]}"
+
+        # I1: CPS concealment
+        AWG_I1=$(generate_cps_i1)
+    else
+        log "  custom-conf: S1-S4, H1-H4, I1-I5 взяты из конфига (рандомизация пропущена)."
     fi
-    AWG_H1="${_h_lines[0]}"
-    AWG_H2="${_h_lines[1]}"
-    AWG_H3="${_h_lines[2]}"
-    AWG_H4="${_h_lines[3]}"
-
-    # I1: CPS concealment
-    AWG_I1=$(generate_cps_i1)
 
     export AWG_Jc AWG_Jmin AWG_Jmax AWG_S1 AWG_S2 AWG_S3 AWG_S4 AWG_PRESET
-    export AWG_H1 AWG_H2 AWG_H3 AWG_H4 AWG_I1
+    export AWG_H1 AWG_H2 AWG_H3 AWG_H4 AWG_I1 AWG_I2 AWG_I3 AWG_I4 AWG_I5
 
     log "  Jc=$AWG_Jc, Jmin=$AWG_Jmin, Jmax=$AWG_Jmax"
     log "  S1=$AWG_S1, S2=$AWG_S2, S3=$AWG_S3, S4=$AWG_S4"
@@ -851,7 +1004,11 @@ generate_awg_params() {
     log "  H2=$AWG_H2"
     log "  H3=$AWG_H3"
     log "  H4=$AWG_H4"
-    log "  I1=$AWG_I1"
+    [[ -n "${AWG_I1}" ]] && log "  I1=$AWG_I1"
+    [[ -n "${AWG_I2}" ]] && log "  I2=$AWG_I2"
+    [[ -n "${AWG_I3}" ]] && log "  I3=$AWG_I3"
+    [[ -n "${AWG_I4}" ]] && log "  I4=$AWG_I4"
+    [[ -n "${AWG_I5}" ]] && log "  I5=$AWG_I5"
     log "Параметры AWG 2.0 сгенерированы."
 }
 
@@ -1800,6 +1957,10 @@ export AWG_H2='${AWG_H2}'
 export AWG_H3='${AWG_H3}'
 export AWG_H4='${AWG_H4}'
 export AWG_I1='${AWG_I1}'
+export AWG_I2='${AWG_I2}'
+export AWG_I3='${AWG_I3}'
+export AWG_I4='${AWG_I4}'
+export AWG_I5='${AWG_I5}'
 export AWG_PRESET='${AWG_PRESET:-default}'
 export NO_TWEAKS=${NO_TWEAKS}
 export AWG_APPLY_MODE='${AWG_APPLY_MODE:-syncconf}'
@@ -1858,9 +2019,19 @@ step1_update_and_optimize() {
         DEBIAN_FRONTEND=noninteractive dpkg --configure -a || log_warn "dpkg --configure -a."
     fi
 
-    log "Обновление системы..."
-    DEBIAN_FRONTEND=noninteractive apt full-upgrade -y || die "Ошибка apt full-upgrade."
-    log "Система обновлена."
+    if [[ "$NO_REBOOT" -eq 1 ]]; then
+        # --no-reboot: апгрейдим без подтягивания новых пакетов (в т.ч. ядра).
+        # Это позволяет не требовать reboot, но security-патчи ядра не
+        # применятся до ручной перезагрузки.
+        log "Обновление системы (--no-reboot: без новых пакетов и ядра)..."
+        DEBIAN_FRONTEND=noninteractive apt-get upgrade --without-new-pkgs -y \
+            || die "Ошибка apt upgrade --without-new-pkgs."
+        log "Система обновлена (новое ядро отложено до ручного reboot)."
+    else
+        log "Обновление системы..."
+        DEBIAN_FRONTEND=noninteractive apt full-upgrade -y || die "Ошибка apt full-upgrade."
+        log "Система обновлена."
+    fi
 
     install_packages curl wget gpg sudo ethtool
 
@@ -1912,7 +2083,7 @@ _try_install_prebuilt_arm() {
     fi
 
     asset_name="amneziawg-kmod-${target_id}_${kernel}_${arch}.deb"
-    asset_url="https://github.com/bivlked/amneziawg-installer/releases/download/arm-packages/${asset_name}"
+    asset_url="https://github.com/valujin/amneziawg-installer/releases/download/arm-packages/${asset_name}"
 
     log "Попытка установки предсобранного пакета: $asset_name"
     tmpfile="$(mktemp /tmp/amneziawg-prebuilt-XXXXXX.deb)"
@@ -2130,7 +2301,7 @@ PPASRC
         log_error "Похоже, ppa.launchpadcontent.net сейчас недоступен — это outage"
         log_error "инфраструктуры Launchpad, не баг скрипта."
         log_error "Подождите 10–15 минут и запустите скрипт снова той же командой."
-        log_error "Подробнее: https://github.com/bivlked/amneziawg-installer/issues/68"
+        log_error "Подробнее: https://github.com/valujin/amneziawg-installer/issues/68"
         die "PPA Amnezia временно недоступен."
     fi
 
@@ -2475,7 +2646,7 @@ AWG_LOGROTATE_EOF
     cat > "$_stage_unit" <<'AWG_SYSTEMD_UNIT_EOF'
 [Unit]
 Description=Ensure amneziawg kernel module is built and loaded
-Documentation=https://github.com/bivlked/amneziawg-installer
+Documentation=https://github.com/valujin/amneziawg-installer
 Before=awg-quick@awg0.service
 After=systemd-modules-load.service local-fs.target
 ConditionPathExists=/usr/local/sbin/amneziawg-ensure-module
