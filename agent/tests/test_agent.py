@@ -285,6 +285,37 @@ def test_routing_reload_and_ru_update(client, record_manage):
     assert record_manage[-1] == ["update-ru-list"]
 
 
+def test_genlib_presets(client):
+    r = client.get("/v1/presets", headers=AUTH)
+    assert r.status_code == 200
+    assert "home" in r.json()["presets"]
+
+
+def test_genlib_generate_preset(client):
+    r = client.post("/v1/generate", headers=AUTH, json={"preset": "home"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["validation"]["ok"] is True
+    assert "Jc" in body["params"] and "I1" in body["params"]
+
+
+def test_genlib_generate_bad_preset_400(client):
+    assert client.post("/v1/generate", headers=AUTH, json={"preset": "nope"}).status_code == 400
+
+
+def test_genlib_validate(client):
+    assert client.post("/v1/validate", headers=AUTH, json={"params": {"Jc": 5}}).json()["ok"] is True
+    assert client.post("/v1/validate", headers=AUTH, json={"params": {"Jc": 999}}).json()["ok"] is False
+
+
+def test_genlib_merge(client, agent):
+    from awg_genlib import vpn_encode, vpn_decode
+    link = vpn_encode({"containers": [{"awg": {"Jc": "4"}}]})
+    r = client.post("/v1/merge", headers=AUTH, json={"link": link, "params": {"Jc": 9}})
+    assert r.status_code == 200
+    assert vpn_decode(r.json()["link"])["containers"][0]["awg"]["Jc"] == "9"
+
+
 def test_manage_failure_surfaces_500(client, agent, monkeypatch):
     def boom(args, timeout=None):
         return types.SimpleNamespace(returncode=1, stdout="", stderr="kaboom")

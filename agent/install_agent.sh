@@ -99,6 +99,12 @@ fi
 mkdir -p "$PREFIX"
 install -m 0644 "$AGENT_SRC_DIR/awg_agent.py" "$PREFIX/awg_agent.py"
 install -m 0644 "$AGENT_SRC_DIR/requirements.txt" "$PREFIX/requirements.txt"
+# awg_genlib (config generator) — optional but bundled when present.
+if [[ -d "$AGENT_SRC_DIR/awg_genlib" ]]; then
+    rm -rf "$PREFIX/awg_genlib"
+    cp -r "$AGENT_SRC_DIR/awg_genlib" "$PREFIX/awg_genlib"
+    find "$PREFIX/awg_genlib" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+fi
 
 if [[ ! -x "$VENV/bin/python" ]]; then
     log "Creating venv at $VENV..."

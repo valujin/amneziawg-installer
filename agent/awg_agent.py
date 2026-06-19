@@ -34,6 +34,20 @@ from pydantic import BaseModel, Field
 
 AGENT_VERSION = "0.1.0"
 
+# Config-generation library (Architect port). Optional: the agent still serves
+# client/exit/routing management if awg_genlib was not deployed alongside it.
+try:
+    from awg_genlib import (
+        generate as genlib_generate,
+        validate as genlib_validate,
+        merge_into_link as genlib_merge_into_link,
+        generate_preset as genlib_generate_preset,
+        list_presets as genlib_list_presets,
+    )
+    GENLIB_OK = True
+except ImportError:  # pragma: no cover
+    GENLIB_OK = False
+
 
 # --------------------------------------------------------------------------
 # Configuration (environment, typically from /etc/awg-agent/agent.env)
@@ -404,6 +418,26 @@ class GeoSplitRequest(BaseModel):
     enabled: bool
 
 
+class GenerateRequest(BaseModel):
+    preset: Optional[str] = None          # if set, overrides the knobs below
+    version: str = "2.0"
+    intensity: str = "medium"
+    extreme: bool = False
+    router_mode: bool = False
+    cps: bool = True
+    mtu: int = 1280
+
+
+class ValidateRequest(BaseModel):
+    params: dict
+    mtu: int = 1280
+
+
+class MergeRequest(BaseModel):
+    link: str                              # a vpn:// link
+    params: dict                           # {Jc,Jmin,Jmax,I1..I5} to patch in
+
+
 # --------------------------------------------------------------------------
 # Auth
 # --------------------------------------------------------------------------
@@ -627,6 +661,49 @@ def show() -> str:
     if rc != 0:
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail=err.strip() or "awg show failed")
     return out
+
+
+# ----- config generator (awg_genlib / Architect port) -----
+def _require_genlib() -> None:
+    if not GENLIB_OK:
+        raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, detail="awg_genlib not deployed on this agent")
+
+
+@app.get("/v1/presets", dependencies=authed)
+def presets() -> dict:
+    _require_genlib()
+    return {"presets": genlib_list_presets()}
+
+
+@app.post("/v1/generate", dependencies=authed)
+def generate_params(req: GenerateRequest) -> dict:
+    _require_genlib()
+    try:
+        if req.preset:
+            params = genlib_generate_preset(req.preset)
+        else:
+            params = genlib_generate(version=req.version, intensity=req.intensity,
+                                     extreme=req.extreme, router_mode=req.router_mode,
+                                     cps=req.cps, mtu=req.mtu)
+    except (KeyError, ValueError) as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(e))
+    return {"params": params, "validation": genlib_validate(params, mtu=req.mtu)}
+
+
+@app.post("/v1/validate", dependencies=authed)
+def validate_params(req: ValidateRequest) -> dict:
+    _require_genlib()
+    return genlib_validate(req.params, mtu=req.mtu)
+
+
+@app.post("/v1/merge", dependencies=authed)
+def merge_link(req: MergeRequest) -> dict:
+    """Patch obfuscation params into a vpn:// link and return the new link."""
+    _require_genlib()
+    try:
+        return {"link": genlib_merge_into_link(req.link, req.params)}
+    except ValueError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"invalid vpn:// link: {e}")
 
 
 def bind_is_unsafe(bind: str) -> bool:
