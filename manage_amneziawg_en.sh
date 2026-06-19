@@ -69,6 +69,10 @@ while [[ $# -gt 0 ]]; do
         --psk)             CLI_ADD_PSK=1; shift ;;
         --yes)             CLI_YES=1; shift ;;
         --carrier=*)       CLI_CARRIER="${1#*=}"; shift ;;
+        --exit=*)          CLI_ADD_EXIT="${1#*=}"; shift ;;
+        --transport=*)     CLI_TRANSPORT="${1#*=}"; shift ;;
+        --ts-ip=*)         CLI_TS_IP="${1#*=}"; shift ;;
+        --force)           CLI_FORCE=1; shift ;;
         --*)               echo "Unknown option: $1" >&2; COMMAND="help"; break ;;
         *)
             if [[ -z "$COMMAND" ]]; then
@@ -1338,6 +1342,9 @@ usage() {
     echo "                        Available: beeline_msk yota_msk tele2_msk tele2_krasnoyarsk"
     echo "                                   tattelecom megafon_regions tmobile_us"
     echo "                        Exit code: 1 only on FAIL or unknown carrier (WARN -> 0)"
+    echo "  --transport=TYPE      (for add-exit) amneziawg (default) or tailscale"
+    echo "  --ts-ip=IP            (for add-exit --transport=tailscale) exit node's Tailscale IP"
+    echo "  --force               (for remove-exit) reset bound clients to direct and remove node"
     echo ""
     echo "Commands:"
     echo "  add <name> [name2 ...]       Add client(s). --expires applies to all"
@@ -1354,6 +1361,14 @@ usage() {
     echo "  restart               Restart AmneziaWG service"
     echo "  repair-module         Repair the kernel module after a kernel upgrade"
     echo "                        (dkms autoinstall + modprobe + start awg-quick)"
+    echo ""
+    echo "Cascade (multi-hop, on the RU entry server):"
+    echo "  add-exit <cc> <conf>  Register an exit node: <conf> is a client .conf issued"
+    echo "                        on the exit server (amneziawg). For tailscale:"
+    echo "                        add-exit <cc> --transport=tailscale --ts-ip=IP"
+    echo "  remove-exit <cc>      Remove an exit node (--force resets bound clients to direct)"
+    echo "  list-exits            List registered exit nodes"
+    echo "  set-exit <client> <cc|direct>  Bind a client to an exit node (or direct = local egress)"
     echo "  help                  Show this help"
     echo ""
     exit 1
@@ -1615,6 +1630,45 @@ case $COMMAND in
 
     diagnose)
         diagnose_server || _cmd_rc=1
+        ;;
+
+    add-exit)
+        # add-exit <cc> <exit-server-client-config> [--transport=tailscale --ts-ip=IP]
+        [[ ${#ARGS[@]} -lt 1 ]] && die "Usage: add-exit <cc> <exit-client-config> [--transport=amneziawg|tailscale] [--ts-ip=IP]"
+        _cc="${ARGS[0]}"; _src="${ARGS[1]:-}"
+        if cascade_add_exit "$_cc" "$_src" "${CLI_TRANSPORT:-amneziawg}" "${CLI_TS_IP:-}"; then
+            [[ "${CLI_TRANSPORT:-amneziawg}" == "amneziawg" ]] && { cascade_iface_up "$_cc" || _cmd_rc=1; }
+            cascade_reload_routing || _cmd_rc=1
+        else
+            _cmd_rc=1
+        fi
+        ;;
+
+    remove-exit)
+        [[ -z "$CLIENT_NAME" ]] && die "Usage: remove-exit <cc> [--force]"
+        if ! confirm_action "remove exit node" "'$CLIENT_NAME'"; then exit 1; fi
+        cascade_iface_down "$CLIENT_NAME"
+        _force=""; [[ "${CLI_FORCE:-0}" == "1" ]] && _force="--force"
+        if cascade_remove_exit "$CLIENT_NAME" $_force; then
+            cascade_reload_routing || _cmd_rc=1
+        else
+            _cmd_rc=1
+        fi
+        ;;
+
+    list-exits)
+        cascade_list_exits
+        ;;
+
+    set-exit)
+        # set-exit <client> <cc|direct>
+        [[ ${#ARGS[@]} -lt 2 ]] && die "Usage: set-exit <client> <cc|direct>"
+        validate_client_name "${ARGS[0]}" || exit 1
+        if set_client_exit "${ARGS[0]}" "${ARGS[1]}"; then
+            cascade_reload_routing || _cmd_rc=1
+        else
+            _cmd_rc=1
+        fi
         ;;
 
     help)

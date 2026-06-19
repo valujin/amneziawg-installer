@@ -18,6 +18,9 @@ AWG_DIR="${AWG_DIR:-/root/awg}"
 CONFIG_FILE="${CONFIG_FILE:-$AWG_DIR/awgsetup_cfg.init}"
 SERVER_CONF_FILE="${SERVER_CONF_FILE:-/etc/amnezia/amneziawg/awg0.conf}"
 KEYS_DIR="${KEYS_DIR:-$AWG_DIR/keys}"
+# Каскад (multi-hop): каталог реестра exit-узлов и каталог конфигов интерфейсов
+EXITS_DIR="${EXITS_DIR:-$AWG_DIR/exits}"
+AWG_CONF_DIR="${AWG_CONF_DIR:-$(dirname "$SERVER_CONF_FILE")}"
 
 # --- Автоочистка временных файлов ---
 # ВАЖНО: trap НЕ устанавливается здесь, чтобы не перезаписать trap вызывающего скрипта.
@@ -509,7 +512,8 @@ safe_load_config() {
                 OS_ID|OS_VERSION|OS_CODENAME|AWG_PORT|AWG_TUNNEL_SUBNET|\
                 DISABLE_IPV6|ALLOWED_IPS_MODE|ALLOWED_IPS|AWG_ENDPOINT|AWG_MTU|\
                 AWG_Jc|AWG_Jmin|AWG_Jmax|AWG_S1|AWG_S2|AWG_S3|AWG_S4|\
-                AWG_H1|AWG_H2|AWG_H3|AWG_H4|AWG_I1|AWG_I2|AWG_I3|AWG_I4|AWG_I5|AWG_PRESET|NO_TWEAKS|AWG_APPLY_MODE)
+                AWG_H1|AWG_H2|AWG_H3|AWG_H4|AWG_I1|AWG_I2|AWG_I3|AWG_I4|AWG_I5|AWG_PRESET|NO_TWEAKS|AWG_APPLY_MODE|\
+                AWG_ROLE|DEFAULT_EXIT|GEO_SPLIT_ENABLED|RU_IPSET_URL|RU_LIST_UPDATE_CRON|RU_LIST_MAX_AGE_DAYS)
                     export "$key=$value"
                     ;;
             esac
@@ -1134,6 +1138,302 @@ EOF
     fi
     chmod 600 "$SERVER_CONF_FILE"
     log "Пир '$name' добавлен в серверный конфиг."
+    return 0
+}
+
+# ==============================================================================
+# Каскад (multi-hop): реестр exit-узлов и привязка клиентов
+# ==============================================================================
+# Каждый exit-узел описан файлом $EXITS_DIR/<cc>.conf со строками KEY=value:
+#   EXIT_CC, EXIT_IFACE, EXIT_ENDPOINT, EXIT_FWMARK, EXIT_TABLE,
+#   EXIT_TRANSPORT (amneziawg|tailscale), EXIT_TS_IP, EXIT_INDEX
+# Привязка клиента к exit-узлу хранится строкой "#_Exit = <cc|direct>"
+# сразу под "#_Name" в [Peer]-блоке awg0.conf (отсутствие == direct).
+
+# Валидация кода/метки exit-узла (cc): буква, затем буквы/цифры, 2..16 симв.
+_cascade_valid_cc() { [[ "$1" =~ ^[a-z][a-z0-9]{1,15}$ ]]; }
+
+# Чтение одного ключа KEY=value из файла (с обрезкой кавычек/CR).
+_cascade_read_kv() {
+    local file="$1" key="$2" line val
+    [[ -f "$file" ]] || return 1
+    line=$(grep -E "^(export[[:space:]]+)?${key}=" "$file" 2>/dev/null | tail -n1) || return 1
+    [[ -n "$line" ]] || return 1
+    val="${line#*=}"; val="${val%$'\r'}"
+    if [[ "$val" == \'*\' ]]; then val="${val#\'}"; val="${val%\'}";
+    elif [[ "$val" == \"*\" ]]; then val="${val#\"}"; val="${val%\"}"; fi
+    printf '%s' "$val"
+}
+
+# Извлечение хоста из строки Endpoint (без порта; поддержка [IPv6]:port).
+_extract_endpoint_host() {
+    local val="$1"
+    val="${val#*= }"; val="${val#*=}"
+    val="${val%%[[:space:]]*}"
+    if [[ "$val" == \[*\]:* ]]; then
+        val="${val#\[}"; val="${val%%\]*}"
+    elif [[ "$val" == *:* && "$val" != *::* ]]; then
+        val="${val%:*}"
+    fi
+    printf '%s' "$val"
+}
+
+# get_client_exit <name> -> печатает cc или "direct"
+get_client_exit() {
+    local name="$1"
+    [[ -f "$SERVER_CONF_FILE" ]] || { echo direct; return 0; }
+    awk -v n="$name" '
+        /^\[Peer\]/      { cur="" }
+        /^#_Name = /     { cur=$0; sub(/^#_Name = /,"",cur) }
+        /^#_Exit = /     { e=$0; sub(/^#_Exit = /,"",e); if (cur==n) { print e; found=1; exit } }
+        END              { if (!found) print "direct" }
+    ' "$SERVER_CONF_FILE"
+}
+
+# set_client_exit <name> <cc|direct> — выставляет #_Exit для пира (атомарно, под flock).
+set_client_exit() {
+    local name="$1" cc="$2"
+    [[ -n "$name" && -n "$cc" ]] || { log_error "set_client_exit: недостаточно аргументов"; return 1; }
+    if [[ "$cc" != "direct" ]] && ! _cascade_valid_cc "$cc"; then
+        log_error "set_client_exit: некорректный код exit-узла '$cc'"; return 1
+    fi
+    if [[ "$cc" != "direct" && ! -f "$EXITS_DIR/$cc.conf" ]]; then
+        log_error "Exit-узел '$cc' не зарегистрирован (см. add-exit)"; return 1
+    fi
+
+    local lockfile="${AWG_DIR}/.awg_config.lock" lock_fd
+    exec {lock_fd}>"$lockfile"
+    if ! flock -x -w 10 "$lock_fd"; then log_error "Не удалось получить блокировку конфига"; exec {lock_fd}>&-; return 1; fi
+
+    if ! grep -qxF "#_Name = ${name}" "$SERVER_CONF_FILE" 2>/dev/null; then
+        log_error "Клиент '$name' не найден"; exec {lock_fd}>&-; return 1
+    fi
+
+    local tmpfile
+    tmpfile=$(awg_mktemp) || { log_error "Ошибка mktemp"; exec {lock_fd}>&-; return 1; }
+    awk -v n="$name" -v ex="$cc" '
+        /^\[Peer\]/ { inpeer=1; istarget=0; print; next }
+        {
+            if (inpeer && $0 ~ /^#_Name = /) {
+                print
+                nm=$0; sub(/^#_Name = /,"",nm)
+                if (nm==n) { print "#_Exit = " ex; istarget=1 } else istarget=0
+                next
+            }
+            if (istarget && $0 ~ /^#_Exit = /) { next }   # выкидываем старую метку у целевого пира
+            print
+        }
+    ' "$SERVER_CONF_FILE" > "$tmpfile" || { rm -f "$tmpfile"; exec {lock_fd}>&-; return 1; }
+
+    if ! mv "$tmpfile" "$SERVER_CONF_FILE"; then
+        rm -f "$tmpfile"; log_error "Ошибка обновления конфига"; exec {lock_fd}>&-; return 1
+    fi
+    chmod 600 "$SERVER_CONF_FILE"
+    exec {lock_fd}>&-
+    log "Клиент '$name' -> exit '$cc'."
+    return 0
+}
+
+# Выбор свободного индекса слота (fwmark=0x<N>, table=100+N).
+_cascade_alloc_index() {
+    local used=" " f n
+    if [[ -d "$EXITS_DIR" ]]; then
+        for f in "$EXITS_DIR"/*.conf; do
+            [[ -e "$f" ]] || continue
+            n=$(_cascade_read_kv "$f" EXIT_INDEX || true)
+            [[ -n "$n" ]] && used+="$n "
+        done
+    fi
+    for ((n=1; n<=200; n++)); do
+        [[ "$used" != *" $n "* ]] && { echo "$n"; return 0; }
+    done
+    return 1
+}
+
+# Установка конфига inter-туннеля на entry: берём клиентский .conf от exit-сервера,
+# добавляем Table = off, убираем строку DNS. _install_inter_conf <cc> <src_conf>
+_install_inter_conf() {
+    local cc="$1" src="$2"
+    local dst="$AWG_CONF_DIR/awg-$cc.conf"
+    [[ -f "$src" ]] || { log_error "Файл конфига exit-узла не найден: $src"; return 1; }
+    mkdir -p "$AWG_CONF_DIR"
+    local tmpfile
+    tmpfile=$(awg_mktemp) || { log_error "Ошибка mktemp"; return 1; }
+    awk '
+        /^\[/                { iface = ($0 ~ /^\[Interface\]/) ? 1 : 0
+                               if (!iface && inif && !table) { print "Table = off"; table=1 }
+                               inif=iface; print; next }
+        inif && /^[[:space:]]*DNS[[:space:]]*=/   { next }      # DNS на сервере не нужен
+        inif && /^[[:space:]]*Table[[:space:]]*=/ { print "Table = off"; table=1; next }
+        { print }
+        END { if (inif && !table) print "Table = off" }
+    ' "$src" > "$tmpfile" || { rm -f "$tmpfile"; return 1; }
+    if ! mv "$tmpfile" "$dst"; then rm -f "$tmpfile"; log_error "Ошибка записи $dst"; return 1; fi
+    chmod 600 "$dst"
+    printf '%s' "$dst"
+}
+
+# cascade_add_exit <cc> <exit_client_conf> [transport] [ts_ip]
+# Регистрирует exit-узел: ставит inter-конфиг (для amneziawg), выделяет слот,
+# пишет реестр $EXITS_DIR/<cc>.conf. Системные действия (enable awg-quick@,
+# рестарт awg-routing) выполняет вызывающий manage-скрипт.
+cascade_add_exit() {
+    local cc="$1" src="$2" transport="${3:-amneziawg}" ts_ip="${4:-}"
+    _cascade_valid_cc "$cc" || { log_error "Некорректный код exit-узла: '$cc'"; return 1; }
+    [[ -f "$EXITS_DIR/$cc.conf" ]] && { log_error "Exit-узел '$cc' уже зарегистрирован"; return 1; }
+    mkdir -p "$EXITS_DIR"
+
+    local idx iface endpoint dst
+    idx=$(_cascade_alloc_index) || { log_error "Нет свободных слотов для exit-узла"; return 1; }
+
+    case "$transport" in
+        amneziawg)
+            iface="awg-$cc"
+            dst=$(_install_inter_conf "$cc" "$src") || return 1
+            endpoint=$(_extract_endpoint_host "$(grep -E '^[[:space:]]*Endpoint' "$dst" | head -1)")
+            [[ -n "$endpoint" ]] || { log_warn "Не удалось извлечь Endpoint из $dst — loop-guard может не сработать"; }
+            ;;
+        tailscale)
+            iface="tailscale0"
+            endpoint=""
+            [[ -n "$ts_ip" ]] || { log_error "Для transport=tailscale нужен Tailscale-IP exit-узла"; return 1; }
+            ;;
+        *) log_error "Неизвестный transport: '$transport' (amneziawg|tailscale)"; return 1 ;;
+    esac
+
+    local tmpfile reg="$EXITS_DIR/$cc.conf"
+    tmpfile=$(awg_mktemp) || return 1
+    cat > "$tmpfile" << EOF
+EXIT_CC=$cc
+EXIT_INDEX=$idx
+EXIT_IFACE=$iface
+EXIT_ENDPOINT=$endpoint
+EXIT_FWMARK=0x$idx
+EXIT_TABLE=$((100 + idx))
+EXIT_TRANSPORT=$transport
+EXIT_TS_IP=$ts_ip
+EOF
+    if ! mv "$tmpfile" "$reg"; then rm -f "$tmpfile"; log_error "Ошибка записи реестра $reg"; return 1; fi
+    chmod 600 "$reg"
+    log "Exit-узел '$cc' зарегистрирован (iface=$iface, fwmark=0x$idx, table=$((100+idx)), transport=$transport)."
+    return 0
+}
+
+# cascade_remove_exit <cc> [--force]
+# Снимает регистрацию exit-узла. Клиентов, привязанных к нему, переводит в direct
+# (с --force) либо отказывает, если такие есть.
+cascade_remove_exit() {
+    local cc="$1" force="${2:-}"
+    _cascade_valid_cc "$cc" || { log_error "Некорректный код exit-узла: '$cc'"; return 1; }
+    [[ -f "$EXITS_DIR/$cc.conf" ]] || { log_error "Exit-узел '$cc' не зарегистрирован"; return 1; }
+
+    local bound; bound=$(cascade_clients_using_exit "$cc")
+    if [[ -n "$bound" ]]; then
+        if [[ "$force" != "--force" ]]; then
+            log_error "К exit-узлу '$cc' привязаны клиенты: $bound. Перепривяжите их или используйте --force."
+            return 1
+        fi
+        local c
+        for c in $bound; do set_client_exit "$c" direct || true; done
+    fi
+    rm -f "$EXITS_DIR/$cc.conf"
+    rm -f "$AWG_CONF_DIR/awg-$cc.conf"
+    log "Exit-узел '$cc' удалён."
+    return 0
+}
+
+# Печатает имена клиентов, привязанных к exit-узлу <cc>.
+cascade_clients_using_exit() {
+    local cc="$1"
+    [[ -f "$SERVER_CONF_FILE" ]] || return 0
+    awk -v cc="$cc" '
+        /^\[Peer\]/  { nm="" }
+        /^#_Name = / { nm=$0; sub(/^#_Name = /,"",nm) }
+        /^#_Exit = / { e=$0; sub(/^#_Exit = /,"",e); if (e==cc && nm!="") print nm }
+    ' "$SERVER_CONF_FILE"
+}
+
+# cascade_list_exits — печатает зарегистрированные exit-узлы (по одному в строке):
+#   <cc> <transport> <iface> <endpoint|ts_ip> fwmark=<m> table=<t>
+cascade_list_exits() {
+    local f cc tr iface ep fw tbl ts
+    [[ -d "$EXITS_DIR" ]] || return 0
+    for f in "$EXITS_DIR"/*.conf; do
+        [[ -e "$f" ]] || continue
+        cc=$(_cascade_read_kv "$f" EXIT_CC); tr=$(_cascade_read_kv "$f" EXIT_TRANSPORT)
+        iface=$(_cascade_read_kv "$f" EXIT_IFACE); ep=$(_cascade_read_kv "$f" EXIT_ENDPOINT)
+        fw=$(_cascade_read_kv "$f" EXIT_FWMARK); tbl=$(_cascade_read_kv "$f" EXIT_TABLE)
+        ts=$(_cascade_read_kv "$f" EXIT_TS_IP)
+        printf '%s\t%s\t%s\t%s\tfwmark=%s\ttable=%s\n' "$cc" "$tr" "$iface" "${ep:-$ts}" "$fw" "$tbl"
+    done
+}
+
+# --- Системные действия каскада (требуют systemd; пропускаются при AWG_SKIP_APPLY=1) ---
+AWG_ROUTING_BIN="${AWG_ROUTING_BIN:-/usr/local/sbin/awg-routing}"
+AWG_ROUTING_SRC="${AWG_ROUTING_SRC:-$AWG_DIR/awg-routing.sh}"
+AWG_ROUTING_UNIT_SRC="${AWG_ROUTING_UNIT_SRC:-$AWG_DIR/awg-routing.service}"
+AWG_ROUTING_UNIT="${AWG_ROUTING_UNIT:-/etc/systemd/system/awg-routing.service}"
+
+# Установить awg-routing (бинарь + systemd-юнит) из $AWG_DIR, если файлы есть.
+cascade_ensure_routing_installed() {
+    [[ "${AWG_SKIP_APPLY:-0}" == "1" ]] && return 0
+    [[ -f "$AWG_ROUTING_SRC" ]] || { log_warn "Не найден $AWG_ROUTING_SRC — awg-routing не установлен."; return 1; }
+    if ! { install -m 0755 "$AWG_ROUTING_SRC" "$AWG_ROUTING_BIN" 2>/dev/null \
+           || { cp "$AWG_ROUTING_SRC" "$AWG_ROUTING_BIN" && chmod 0755 "$AWG_ROUTING_BIN"; }; }; then
+        log_error "Не удалось установить $AWG_ROUTING_BIN"; return 1
+    fi
+    if [[ -f "$AWG_ROUTING_UNIT_SRC" ]]; then
+        mkdir -p "$(dirname "$AWG_ROUTING_UNIT")"
+        cp "$AWG_ROUTING_UNIT_SRC" "$AWG_ROUTING_UNIT" 2>/dev/null && chmod 0644 "$AWG_ROUTING_UNIT" 2>/dev/null || true
+        systemctl daemon-reload 2>/dev/null || true
+        systemctl enable awg-routing.service 2>/dev/null || true
+    fi
+    return 0
+}
+
+# Применить/перезапустить маршрутизацию каскада (ipset + fwmark + policy routing).
+cascade_reload_routing() {
+    if [[ "${AWG_SKIP_APPLY:-0}" == "1" ]]; then log_debug "cascade_reload_routing пропущен (AWG_SKIP_APPLY=1)"; return 0; fi
+    cascade_ensure_routing_installed || true
+    if systemctl restart awg-routing.service 2>/dev/null; then
+        log "Маршрутизация каскада применена (awg-routing.service)."; return 0
+    fi
+    if [[ -x "$AWG_ROUTING_BIN" ]] && "$AWG_ROUTING_BIN" apply; then
+        log "Маршрутизация каскада применена ($AWG_ROUTING_BIN)."; return 0
+    fi
+    log_warn "Не удалось применить маршрутизацию каскада (нет awg-routing.service/бинаря)."
+    return 1
+}
+
+# systemd drop-in, который заставляет awg-routing.service стартовать ПОСЛЕ
+# туннеля exit-узла (корректный порядок при загрузке без перечисления exit'ов в юните).
+_cascade_dropin() { echo "/etc/systemd/system/awg-routing.service.d/after-${1}.conf"; }
+
+# Поднять интерфейс inter-туннеля exit-узла (amneziawg transport).
+cascade_iface_up() {
+    local cc="$1"
+    [[ "${AWG_SKIP_APPLY:-0}" == "1" ]] && { log_debug "cascade_iface_up пропущен (AWG_SKIP_APPLY=1)"; return 0; }
+    local dropin; dropin=$(_cascade_dropin "$cc")
+    mkdir -p "$(dirname "$dropin")"
+    cat > "$dropin" << EOF
+[Unit]
+After=awg-quick@awg-${cc}.service
+Wants=awg-quick@awg-${cc}.service
+EOF
+    systemctl daemon-reload 2>/dev/null || true
+    if systemctl enable --now "awg-quick@awg-${cc}" 2>/dev/null; then
+        log "Интерфейс awg-${cc} поднят и добавлен в автозапуск."; return 0
+    fi
+    log_error "Не удалось поднять awg-quick@awg-${cc}."; return 1
+}
+
+# Остановить интерфейс inter-туннеля exit-узла.
+cascade_iface_down() {
+    local cc="$1"
+    [[ "${AWG_SKIP_APPLY:-0}" == "1" ]] && return 0
+    systemctl disable --now "awg-quick@awg-${cc}" 2>/dev/null || true
+    rm -f "$(_cascade_dropin "$cc")"
+    systemctl daemon-reload 2>/dev/null || true
     return 0
 }
 

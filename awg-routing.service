@@ -1,0 +1,21 @@
+[Unit]
+Description=AmneziaWG cascade split-routing (entry / RU node)
+Documentation=https://github.com/bivlked/amneziawg-installer/blob/main/CASCADE.md
+# Ordered after the client-facing tunnel and the network; per-exit tunnels add
+# their own ordering via drop-ins (/etc/systemd/system/awg-routing.service.d/).
+# awg-routing.sh is boot-race tolerant: an exit whose interface isn't up yet is
+# skipped and applied on the next run.
+After=network-online.target awg-quick@awg0.service
+Wants=network-online.target
+Requires=awg-quick@awg0.service
+ConditionPathExists=/usr/local/sbin/awg-routing
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/awg-routing apply
+ExecReload=/usr/local/sbin/awg-routing apply
+ExecStop=/usr/local/sbin/awg-routing flush
+
+[Install]
+WantedBy=multi-user.target

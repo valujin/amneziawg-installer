@@ -559,7 +559,8 @@ safe_load_config() {
                 OS_ID|OS_VERSION|OS_CODENAME|AWG_PORT|AWG_TUNNEL_SUBNET|\
                 DISABLE_IPV6|ALLOWED_IPS_MODE|ALLOWED_IPS|AWG_ENDPOINT|AWG_MTU|\
                 AWG_Jc|AWG_Jmin|AWG_Jmax|AWG_S1|AWG_S2|AWG_S3|AWG_S4|\
-                AWG_H1|AWG_H2|AWG_H3|AWG_H4|AWG_I1|AWG_I2|AWG_I3|AWG_I4|AWG_I5|AWG_PRESET|NO_TWEAKS|AWG_APPLY_MODE)
+                AWG_H1|AWG_H2|AWG_H3|AWG_H4|AWG_I1|AWG_I2|AWG_I3|AWG_I4|AWG_I5|AWG_PRESET|NO_TWEAKS|AWG_APPLY_MODE|\
+                AWG_ROLE|DEFAULT_EXIT|GEO_SPLIT_ENABLED|RU_IPSET_URL|RU_LIST_UPDATE_CRON|RU_LIST_MAX_AGE_DAYS)
                     export "$key=$value"
                     ;;
             esac
@@ -2031,7 +2032,7 @@ step1_update_and_optimize() {
         log "System updated."
     fi
 
-    install_packages curl wget gpg sudo ethtool
+    install_packages curl wget gpg sudo ethtool ipset
 
     if [[ "$NO_TWEAKS" -eq 0 ]]; then
         # System optimization

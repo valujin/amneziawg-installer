@@ -18,6 +18,9 @@ AWG_DIR="${AWG_DIR:-/root/awg}"
 CONFIG_FILE="${CONFIG_FILE:-$AWG_DIR/awgsetup_cfg.init}"
 SERVER_CONF_FILE="${SERVER_CONF_FILE:-/etc/amnezia/amneziawg/awg0.conf}"
 KEYS_DIR="${KEYS_DIR:-$AWG_DIR/keys}"
+# Cascade (multi-hop): exit-node registry dir and interface config dir
+EXITS_DIR="${EXITS_DIR:-$AWG_DIR/exits}"
+AWG_CONF_DIR="${AWG_CONF_DIR:-$(dirname "$SERVER_CONF_FILE")}"
 
 # --- Auto-cleanup of temporary files ---
 # NOTE: trap is NOT set here to avoid overwriting the caller's trap handler.
@@ -512,7 +515,8 @@ safe_load_config() {
                 OS_ID|OS_VERSION|OS_CODENAME|AWG_PORT|AWG_TUNNEL_SUBNET|\
                 DISABLE_IPV6|ALLOWED_IPS_MODE|ALLOWED_IPS|AWG_ENDPOINT|AWG_MTU|\
                 AWG_Jc|AWG_Jmin|AWG_Jmax|AWG_S1|AWG_S2|AWG_S3|AWG_S4|\
-                AWG_H1|AWG_H2|AWG_H3|AWG_H4|AWG_I1|AWG_I2|AWG_I3|AWG_I4|AWG_I5|AWG_PRESET|NO_TWEAKS|AWG_APPLY_MODE)
+                AWG_H1|AWG_H2|AWG_H3|AWG_H4|AWG_I1|AWG_I2|AWG_I3|AWG_I4|AWG_I5|AWG_PRESET|NO_TWEAKS|AWG_APPLY_MODE|\
+                AWG_ROLE|DEFAULT_EXIT|GEO_SPLIT_ENABLED|RU_IPSET_URL|RU_LIST_UPDATE_CRON|RU_LIST_MAX_AGE_DAYS)
                     export "$key=$value"
                     ;;
             esac
@@ -1137,6 +1141,302 @@ EOF
     fi
     chmod 600 "$SERVER_CONF_FILE"
     log "Peer '$name' added to server config."
+    return 0
+}
+
+# ==============================================================================
+# Cascade (multi-hop): exit-node registry and per-client exit binding
+# ==============================================================================
+# Each exit node is described by $EXITS_DIR/<cc>.conf with KEY=value lines:
+#   EXIT_CC, EXIT_IFACE, EXIT_ENDPOINT, EXIT_FWMARK, EXIT_TABLE,
+#   EXIT_TRANSPORT (amneziawg|tailscale), EXIT_TS_IP, EXIT_INDEX
+# A client's exit binding is the line "#_Exit = <cc|direct>" right under
+# "#_Name" in its [Peer] block in awg0.conf (absent == direct).
+
+# Validate exit-node code/label (cc): letter, then letters/digits, 2..16 chars.
+_cascade_valid_cc() { [[ "$1" =~ ^[a-z][a-z0-9]{1,15}$ ]]; }
+
+# Read a single KEY=value from a file (strips quotes/CR).
+_cascade_read_kv() {
+    local file="$1" key="$2" line val
+    [[ -f "$file" ]] || return 1
+    line=$(grep -E "^(export[[:space:]]+)?${key}=" "$file" 2>/dev/null | tail -n1) || return 1
+    [[ -n "$line" ]] || return 1
+    val="${line#*=}"; val="${val%$'\r'}"
+    if [[ "$val" == \'*\' ]]; then val="${val#\'}"; val="${val%\'}";
+    elif [[ "$val" == \"*\" ]]; then val="${val#\"}"; val="${val%\"}"; fi
+    printf '%s' "$val"
+}
+
+# Extract host from an Endpoint line (no port; supports [IPv6]:port).
+_extract_endpoint_host() {
+    local val="$1"
+    val="${val#*= }"; val="${val#*=}"
+    val="${val%%[[:space:]]*}"
+    if [[ "$val" == \[*\]:* ]]; then
+        val="${val#\[}"; val="${val%%\]*}"
+    elif [[ "$val" == *:* && "$val" != *::* ]]; then
+        val="${val%:*}"
+    fi
+    printf '%s' "$val"
+}
+
+# get_client_exit <name> -> prints cc or "direct"
+get_client_exit() {
+    local name="$1"
+    [[ -f "$SERVER_CONF_FILE" ]] || { echo direct; return 0; }
+    awk -v n="$name" '
+        /^\[Peer\]/      { cur="" }
+        /^#_Name = /     { cur=$0; sub(/^#_Name = /,"",cur) }
+        /^#_Exit = /     { e=$0; sub(/^#_Exit = /,"",e); if (cur==n) { print e; found=1; exit } }
+        END              { if (!found) print "direct" }
+    ' "$SERVER_CONF_FILE"
+}
+
+# set_client_exit <name> <cc|direct> — set the #_Exit for a peer (atomic, under flock).
+set_client_exit() {
+    local name="$1" cc="$2"
+    [[ -n "$name" && -n "$cc" ]] || { log_error "set_client_exit: insufficient arguments"; return 1; }
+    if [[ "$cc" != "direct" ]] && ! _cascade_valid_cc "$cc"; then
+        log_error "set_client_exit: invalid exit code '$cc'"; return 1
+    fi
+    if [[ "$cc" != "direct" && ! -f "$EXITS_DIR/$cc.conf" ]]; then
+        log_error "Exit node '$cc' is not registered (see add-exit)"; return 1
+    fi
+
+    local lockfile="${AWG_DIR}/.awg_config.lock" lock_fd
+    exec {lock_fd}>"$lockfile"
+    if ! flock -x -w 10 "$lock_fd"; then log_error "Failed to acquire config lock"; exec {lock_fd}>&-; return 1; fi
+
+    if ! grep -qxF "#_Name = ${name}" "$SERVER_CONF_FILE" 2>/dev/null; then
+        log_error "Client '$name' not found"; exec {lock_fd}>&-; return 1
+    fi
+
+    local tmpfile
+    tmpfile=$(awg_mktemp) || { log_error "mktemp failed"; exec {lock_fd}>&-; return 1; }
+    awk -v n="$name" -v ex="$cc" '
+        /^\[Peer\]/ { inpeer=1; istarget=0; print; next }
+        {
+            if (inpeer && $0 ~ /^#_Name = /) {
+                print
+                nm=$0; sub(/^#_Name = /,"",nm)
+                if (nm==n) { print "#_Exit = " ex; istarget=1 } else istarget=0
+                next
+            }
+            if (istarget && $0 ~ /^#_Exit = /) { next }   # drop the old label on the target peer
+            print
+        }
+    ' "$SERVER_CONF_FILE" > "$tmpfile" || { rm -f "$tmpfile"; exec {lock_fd}>&-; return 1; }
+
+    if ! mv "$tmpfile" "$SERVER_CONF_FILE"; then
+        rm -f "$tmpfile"; log_error "Failed to update config"; exec {lock_fd}>&-; return 1
+    fi
+    chmod 600 "$SERVER_CONF_FILE"
+    exec {lock_fd}>&-
+    log "Client '$name' -> exit '$cc'."
+    return 0
+}
+
+# Pick a free slot index (fwmark=0x<N>, table=100+N).
+_cascade_alloc_index() {
+    local used=" " f n
+    if [[ -d "$EXITS_DIR" ]]; then
+        for f in "$EXITS_DIR"/*.conf; do
+            [[ -e "$f" ]] || continue
+            n=$(_cascade_read_kv "$f" EXIT_INDEX || true)
+            [[ -n "$n" ]] && used+="$n "
+        done
+    fi
+    for ((n=1; n<=200; n++)); do
+        [[ "$used" != *" $n "* ]] && { echo "$n"; return 0; }
+    done
+    return 1
+}
+
+# Install the inter-tunnel config on the entry: take the exit server's client .conf,
+# add Table = off, strip the DNS line. _install_inter_conf <cc> <src_conf>
+_install_inter_conf() {
+    local cc="$1" src="$2"
+    local dst="$AWG_CONF_DIR/awg-$cc.conf"
+    [[ -f "$src" ]] || { log_error "Exit-node config file not found: $src"; return 1; }
+    mkdir -p "$AWG_CONF_DIR"
+    local tmpfile
+    tmpfile=$(awg_mktemp) || { log_error "mktemp failed"; return 1; }
+    awk '
+        /^\[/                { iface = ($0 ~ /^\[Interface\]/) ? 1 : 0
+                               if (!iface && inif && !table) { print "Table = off"; table=1 }
+                               inif=iface; print; next }
+        inif && /^[[:space:]]*DNS[[:space:]]*=/   { next }      # DNS not needed on the server
+        inif && /^[[:space:]]*Table[[:space:]]*=/ { print "Table = off"; table=1; next }
+        { print }
+        END { if (inif && !table) print "Table = off" }
+    ' "$src" > "$tmpfile" || { rm -f "$tmpfile"; return 1; }
+    if ! mv "$tmpfile" "$dst"; then rm -f "$tmpfile"; log_error "Failed to write $dst"; return 1; fi
+    chmod 600 "$dst"
+    printf '%s' "$dst"
+}
+
+# cascade_add_exit <cc> <exit_client_conf> [transport] [ts_ip]
+# Registers an exit node: installs the inter-config (amneziawg), allocates a slot,
+# writes the registry $EXITS_DIR/<cc>.conf. System actions (enable awg-quick@,
+# restart awg-routing) are performed by the calling manage script.
+cascade_add_exit() {
+    local cc="$1" src="$2" transport="${3:-amneziawg}" ts_ip="${4:-}"
+    _cascade_valid_cc "$cc" || { log_error "Invalid exit-node code: '$cc'"; return 1; }
+    [[ -f "$EXITS_DIR/$cc.conf" ]] && { log_error "Exit node '$cc' is already registered"; return 1; }
+    mkdir -p "$EXITS_DIR"
+
+    local idx iface endpoint dst
+    idx=$(_cascade_alloc_index) || { log_error "No free slots for an exit node"; return 1; }
+
+    case "$transport" in
+        amneziawg)
+            iface="awg-$cc"
+            dst=$(_install_inter_conf "$cc" "$src") || return 1
+            endpoint=$(_extract_endpoint_host "$(grep -E '^[[:space:]]*Endpoint' "$dst" | head -1)")
+            [[ -n "$endpoint" ]] || { log_warn "Could not extract Endpoint from $dst — loop-guard may not work"; }
+            ;;
+        tailscale)
+            iface="tailscale0"
+            endpoint=""
+            [[ -n "$ts_ip" ]] || { log_error "transport=tailscale requires the exit node's Tailscale IP"; return 1; }
+            ;;
+        *) log_error "Unknown transport: '$transport' (amneziawg|tailscale)"; return 1 ;;
+    esac
+
+    local tmpfile reg="$EXITS_DIR/$cc.conf"
+    tmpfile=$(awg_mktemp) || return 1
+    cat > "$tmpfile" << EOF
+EXIT_CC=$cc
+EXIT_INDEX=$idx
+EXIT_IFACE=$iface
+EXIT_ENDPOINT=$endpoint
+EXIT_FWMARK=0x$idx
+EXIT_TABLE=$((100 + idx))
+EXIT_TRANSPORT=$transport
+EXIT_TS_IP=$ts_ip
+EOF
+    if ! mv "$tmpfile" "$reg"; then rm -f "$tmpfile"; log_error "Failed to write registry $reg"; return 1; fi
+    chmod 600 "$reg"
+    log "Exit node '$cc' registered (iface=$iface, fwmark=0x$idx, table=$((100+idx)), transport=$transport)."
+    return 0
+}
+
+# cascade_remove_exit <cc> [--force]
+# Unregisters an exit node. Clients bound to it are reset to direct (with --force),
+# otherwise the command refuses if any are bound.
+cascade_remove_exit() {
+    local cc="$1" force="${2:-}"
+    _cascade_valid_cc "$cc" || { log_error "Invalid exit-node code: '$cc'"; return 1; }
+    [[ -f "$EXITS_DIR/$cc.conf" ]] || { log_error "Exit node '$cc' is not registered"; return 1; }
+
+    local bound; bound=$(cascade_clients_using_exit "$cc")
+    if [[ -n "$bound" ]]; then
+        if [[ "$force" != "--force" ]]; then
+            log_error "Clients are bound to exit '$cc': $bound. Reassign them or use --force."
+            return 1
+        fi
+        local c
+        for c in $bound; do set_client_exit "$c" direct || true; done
+    fi
+    rm -f "$EXITS_DIR/$cc.conf"
+    rm -f "$AWG_CONF_DIR/awg-$cc.conf"
+    log "Exit node '$cc' removed."
+    return 0
+}
+
+# Prints names of clients bound to exit node <cc>.
+cascade_clients_using_exit() {
+    local cc="$1"
+    [[ -f "$SERVER_CONF_FILE" ]] || return 0
+    awk -v cc="$cc" '
+        /^\[Peer\]/  { nm="" }
+        /^#_Name = / { nm=$0; sub(/^#_Name = /,"",nm) }
+        /^#_Exit = / { e=$0; sub(/^#_Exit = /,"",e); if (e==cc && nm!="") print nm }
+    ' "$SERVER_CONF_FILE"
+}
+
+# cascade_list_exits — prints registered exit nodes (one per line):
+#   <cc> <transport> <iface> <endpoint|ts_ip> fwmark=<m> table=<t>
+cascade_list_exits() {
+    local f cc tr iface ep fw tbl ts
+    [[ -d "$EXITS_DIR" ]] || return 0
+    for f in "$EXITS_DIR"/*.conf; do
+        [[ -e "$f" ]] || continue
+        cc=$(_cascade_read_kv "$f" EXIT_CC); tr=$(_cascade_read_kv "$f" EXIT_TRANSPORT)
+        iface=$(_cascade_read_kv "$f" EXIT_IFACE); ep=$(_cascade_read_kv "$f" EXIT_ENDPOINT)
+        fw=$(_cascade_read_kv "$f" EXIT_FWMARK); tbl=$(_cascade_read_kv "$f" EXIT_TABLE)
+        ts=$(_cascade_read_kv "$f" EXIT_TS_IP)
+        printf '%s\t%s\t%s\t%s\tfwmark=%s\ttable=%s\n' "$cc" "$tr" "$iface" "${ep:-$ts}" "$fw" "$tbl"
+    done
+}
+
+# --- Cascade system actions (need systemd; skipped when AWG_SKIP_APPLY=1) ---
+AWG_ROUTING_BIN="${AWG_ROUTING_BIN:-/usr/local/sbin/awg-routing}"
+AWG_ROUTING_SRC="${AWG_ROUTING_SRC:-$AWG_DIR/awg-routing.sh}"
+AWG_ROUTING_UNIT_SRC="${AWG_ROUTING_UNIT_SRC:-$AWG_DIR/awg-routing.service}"
+AWG_ROUTING_UNIT="${AWG_ROUTING_UNIT:-/etc/systemd/system/awg-routing.service}"
+
+# Install awg-routing (binary + systemd unit) from $AWG_DIR if the files exist.
+cascade_ensure_routing_installed() {
+    [[ "${AWG_SKIP_APPLY:-0}" == "1" ]] && return 0
+    [[ -f "$AWG_ROUTING_SRC" ]] || { log_warn "$AWG_ROUTING_SRC not found — awg-routing not installed."; return 1; }
+    if ! { install -m 0755 "$AWG_ROUTING_SRC" "$AWG_ROUTING_BIN" 2>/dev/null \
+           || { cp "$AWG_ROUTING_SRC" "$AWG_ROUTING_BIN" && chmod 0755 "$AWG_ROUTING_BIN"; }; }; then
+        log_error "Failed to install $AWG_ROUTING_BIN"; return 1
+    fi
+    if [[ -f "$AWG_ROUTING_UNIT_SRC" ]]; then
+        mkdir -p "$(dirname "$AWG_ROUTING_UNIT")"
+        cp "$AWG_ROUTING_UNIT_SRC" "$AWG_ROUTING_UNIT" 2>/dev/null && chmod 0644 "$AWG_ROUTING_UNIT" 2>/dev/null || true
+        systemctl daemon-reload 2>/dev/null || true
+        systemctl enable awg-routing.service 2>/dev/null || true
+    fi
+    return 0
+}
+
+# Apply/restart cascade routing (ipset + fwmark + policy routing).
+cascade_reload_routing() {
+    if [[ "${AWG_SKIP_APPLY:-0}" == "1" ]]; then log_debug "cascade_reload_routing skipped (AWG_SKIP_APPLY=1)"; return 0; fi
+    cascade_ensure_routing_installed || true
+    if systemctl restart awg-routing.service 2>/dev/null; then
+        log "Cascade routing applied (awg-routing.service)."; return 0
+    fi
+    if [[ -x "$AWG_ROUTING_BIN" ]] && "$AWG_ROUTING_BIN" apply; then
+        log "Cascade routing applied ($AWG_ROUTING_BIN)."; return 0
+    fi
+    log_warn "Could not apply cascade routing (no awg-routing.service/binary)."
+    return 1
+}
+
+# systemd drop-in that makes awg-routing.service start AFTER an exit's tunnel
+# (correct boot order without listing exits in the unit).
+_cascade_dropin() { echo "/etc/systemd/system/awg-routing.service.d/after-${1}.conf"; }
+
+# Bring up an exit node's inter-tunnel interface (amneziawg transport).
+cascade_iface_up() {
+    local cc="$1"
+    [[ "${AWG_SKIP_APPLY:-0}" == "1" ]] && { log_debug "cascade_iface_up skipped (AWG_SKIP_APPLY=1)"; return 0; }
+    local dropin; dropin=$(_cascade_dropin "$cc")
+    mkdir -p "$(dirname "$dropin")"
+    cat > "$dropin" << EOF
+[Unit]
+After=awg-quick@awg-${cc}.service
+Wants=awg-quick@awg-${cc}.service
+EOF
+    systemctl daemon-reload 2>/dev/null || true
+    if systemctl enable --now "awg-quick@awg-${cc}" 2>/dev/null; then
+        log "Interface awg-${cc} is up and enabled at boot."; return 0
+    fi
+    log_error "Failed to bring up awg-quick@awg-${cc}."; return 1
+}
+
+# Bring down an exit node's inter-tunnel interface.
+cascade_iface_down() {
+    local cc="$1"
+    [[ "${AWG_SKIP_APPLY:-0}" == "1" ]] && return 0
+    systemctl disable --now "awg-quick@awg-${cc}" 2>/dev/null || true
+    rm -f "$(_cascade_dropin "$cc")"
+    systemctl daemon-reload 2>/dev/null || true
     return 0
 }
 

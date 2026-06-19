@@ -69,6 +69,10 @@ while [[ $# -gt 0 ]]; do
         --psk)             CLI_ADD_PSK=1; shift ;;
         --yes)             CLI_YES=1; shift ;;
         --carrier=*)       CLI_CARRIER="${1#*=}"; shift ;;
+        --exit=*)          CLI_ADD_EXIT="${1#*=}"; shift ;;
+        --transport=*)     CLI_TRANSPORT="${1#*=}"; shift ;;
+        --ts-ip=*)         CLI_TS_IP="${1#*=}"; shift ;;
+        --force)           CLI_FORCE=1; shift ;;
         --*)               echo "Неизвестная опция: $1" >&2; COMMAND="help"; break ;;
         *)
             if [[ -z "$COMMAND" ]]; then
@@ -1336,6 +1340,9 @@ usage() {
     echo "                        Доступные: beeline_msk yota_msk tele2_msk tele2_krasnoyarsk"
     echo "                                   tattelecom megafon_regions tmobile_us"
     echo "                        Exit code: 1 только при FAIL или неизвестном операторе (WARN -> 0)"
+    echo "  --transport=ТИП       (для add-exit) amneziawg (умолч.) или tailscale"
+    echo "  --ts-ip=IP            (для add-exit --transport=tailscale) Tailscale-IP exit-узла"
+    echo "  --force               (для remove-exit) перепривязать клиентов в direct и удалить узел"
     echo ""
     echo "Команды:"
     echo "  add <имя> [имя2 ...]        Добавить клиента(ов). --expires применяется ко всем"
@@ -1352,6 +1359,14 @@ usage() {
     echo "  restart               Перезапустить сервис AmneziaWG"
     echo "  repair-module         Восстановить модуль ядра после kernel upgrade"
     echo "                        (dkms autoinstall + modprobe + запуск awg-quick)"
+    echo ""
+    echo "Каскад (multi-hop, на сервере-входе RU):"
+    echo "  add-exit <cc> <конфиг> Зарегистрировать exit-узел: <конфиг> — клиентский .conf,"
+    echo "                        выпущенный на exit-сервере (amneziawg). Для tailscale:"
+    echo "                        add-exit <cc> --transport=tailscale --ts-ip=IP"
+    echo "  remove-exit <cc>      Удалить exit-узел (--force перепривязывает клиентов в direct)"
+    echo "  list-exits            Показать зарегистрированные exit-узлы"
+    echo "  set-exit <клиент> <cc|direct>  Привязать клиента к exit-узлу (или direct = локальный выход)"
     echo "  help                  Показать эту справку"
     echo ""
     exit 1
@@ -1613,6 +1628,45 @@ case $COMMAND in
 
     diagnose)
         diagnose_server || _cmd_rc=1
+        ;;
+
+    add-exit)
+        # add-exit <cc> <конфиг-клиента-от-exit-сервера> [--transport=tailscale --ts-ip=IP]
+        [[ ${#ARGS[@]} -lt 1 ]] && die "Использование: add-exit <cc> <конфиг-клиента-от-exit> [--transport=amneziawg|tailscale] [--ts-ip=IP]"
+        _cc="${ARGS[0]}"; _src="${ARGS[1]:-}"
+        if cascade_add_exit "$_cc" "$_src" "${CLI_TRANSPORT:-amneziawg}" "${CLI_TS_IP:-}"; then
+            [[ "${CLI_TRANSPORT:-amneziawg}" == "amneziawg" ]] && { cascade_iface_up "$_cc" || _cmd_rc=1; }
+            cascade_reload_routing || _cmd_rc=1
+        else
+            _cmd_rc=1
+        fi
+        ;;
+
+    remove-exit)
+        [[ -z "$CLIENT_NAME" ]] && die "Использование: remove-exit <cc> [--force]"
+        if ! confirm_action "удалить exit-узел" "'$CLIENT_NAME'"; then exit 1; fi
+        cascade_iface_down "$CLIENT_NAME"
+        _force=""; [[ "${CLI_FORCE:-0}" == "1" ]] && _force="--force"
+        if cascade_remove_exit "$CLIENT_NAME" $_force; then
+            cascade_reload_routing || _cmd_rc=1
+        else
+            _cmd_rc=1
+        fi
+        ;;
+
+    list-exits)
+        cascade_list_exits
+        ;;
+
+    set-exit)
+        # set-exit <клиент> <cc|direct>
+        [[ ${#ARGS[@]} -lt 2 ]] && die "Использование: set-exit <клиент> <cc|direct>"
+        validate_client_name "${ARGS[0]}" || exit 1
+        if set_client_exit "${ARGS[0]}" "${ARGS[1]}"; then
+            cascade_reload_routing || _cmd_rc=1
+        else
+            _cmd_rc=1
+        fi
         ;;
 
     help)
