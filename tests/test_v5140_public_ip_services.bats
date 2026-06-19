@@ -45,30 +45,7 @@ _extract_urls() {
     [[ "$block" == *"ifconfig.io"* ]]
 }
 
-@test "get_server_public_ip: structural EN - service list contains 6 endpoints" {
-    local FILE="${BATS_TEST_DIRNAME}/../awg_common_en.sh"
-    local block
-    block=$(awk '/^get_server_public_ip\(\) \{$/,/^}$/' "$FILE")
-    [[ "$block" == *"checkip.amazonaws.com"* ]]
-    [[ "$block" == *"ifconfig.me"* ]]
-    [[ "$block" == *"api.ipify.org"* ]]
-    [[ "$block" == *"icanhazip.com"* ]]
-    [[ "$block" == *"ipinfo.io/ip"* ]]
-    [[ "$block" == *"ifconfig.io"* ]]
-}
 
-@test "get_server_public_ip: RU and EN service lists are byte-identical (parity)" {
-    local RU_FILE="${BATS_TEST_DIRNAME}/../awg_common.sh"
-    local EN_FILE="${BATS_TEST_DIRNAME}/../awg_common_en.sh"
-    local ru_urls en_urls
-    ru_urls=$(_extract_urls "$RU_FILE")
-    en_urls=$(_extract_urls "$EN_FILE")
-    [ -n "$ru_urls" ]
-    [ "$ru_urls" = "$en_urls" ]
-    local count
-    count=$(printf '%s\n' "$ru_urls" | wc -l)
-    [ "$count" -eq 6 ]
-}
 
 @test "get_server_public_ip: alphabetical order RU - api.ipify.org first" {
     local FILE="${BATS_TEST_DIRNAME}/../awg_common.sh"

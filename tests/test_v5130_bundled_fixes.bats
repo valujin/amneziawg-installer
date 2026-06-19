@@ -24,23 +24,7 @@
     [[ "$block" == *'>&2'* ]]
 }
 
-@test "v5.13.0 rcgr: EN manage log_msg routes WARN to stderr" {
-    block=$(awk '/^log_msg\(\) \{/,/^\}/' \
-        "$BATS_TEST_DIRNAME/../manage_amneziawg_en.sh")
-    [[ "$block" == *'"$type" == "ERROR" || "$type" == "WARN"'* ]]
-    [[ "$block" == *'>&2'* ]]
-}
 
-@test "v5.13.0 rcgr: RU and EN manage log_msg are in sync" {
-    ru=$(awk '/^log_msg\(\) \{/,/^\}/' \
-        "$BATS_TEST_DIRNAME/../manage_amneziawg.sh" \
-        | grep -c '"$type" == "ERROR" || "$type" == "WARN"')
-    en=$(awk '/^log_msg\(\) \{/,/^\}/' \
-        "$BATS_TEST_DIRNAME/../manage_amneziawg_en.sh" \
-        | grep -c '"$type" == "ERROR" || "$type" == "WARN"')
-    [ "$ru" -eq 1 ]
-    [ "$en" -eq 1 ]
-}
 
 @test "v5.13.0 rcgr: manage log_msg now matches install log_msg behaviour" {
     # install_amneziawg.sh already routed WARN to stderr (line ~110).
@@ -99,12 +83,6 @@ run_warn_routed() {
         "$BATS_TEST_DIRNAME/../install_amneziawg.sh"
 }
 
-@test "v5.13.0 i31a: EN install uses awk field check for /swapfile in fstab" {
-    grep -q "awk '!/\^\[\[:space:\]\]\*#/ && \\\$1 == \"/swapfile\" && \\\$3 == \"swap\"" \
-        "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
-    ! grep -q "grep -q '/swapfile' /etc/fstab" \
-        "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
-}
 
 # ---- functional: simulate the awk check on various fstab contents ----
 

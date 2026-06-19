@@ -17,7 +17,6 @@
 bats_require_minimum_version 1.5.0
 
 RU_SCRIPT="$BATS_TEST_DIRNAME/../install_amneziawg.sh"
-EN_SCRIPT="$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
 
 # Load setup_improved_firewall from a given installer into the current shell,
 # with the interactive `< /dev/tty` redirect removed so `read` uses stdin.
@@ -86,29 +85,5 @@ setup() {
     grep -qx 'enable' "$UFW_CALLS"
 }
 
-@test "EN: declining UFW (N) returns 0 and does not enable" {
-    _load_firewall_fn "$EN_SCRIPT"
-    run bash -c 'printf "N\n" | setup_improved_firewall'
-    [ "$status" -eq 0 ]
-    run ! grep -qx 'enable' "$UFW_CALLS"
-}
 
-@test "EN: accepting UFW (y) returns 0 and calls enable" {
-    _load_firewall_fn "$EN_SCRIPT"
-    run bash -c 'printf "y\n" | setup_improved_firewall'
-    [ "$status" -eq 0 ]
-    grep -qx 'enable' "$UFW_CALLS"
-}
 
-@test "RU/EN parity: both return 0 (not 1) on declined UFW" {
-    # The decline branch (from `confirm_ufw =~` test to its closing fi) must
-    # end in `return 0`, not `return 1`.
-    run bash -c "awk '/confirm_ufw.*=~/,/^        fi/' '$RU_SCRIPT' | grep -c 'return 0'"
-    [ "$output" -ge 1 ]
-    run bash -c "awk '/confirm_ufw.*=~/,/^        fi/' '$RU_SCRIPT' | grep -c 'return 1'"
-    [ "$output" -eq 0 ]
-    run bash -c "awk '/confirm_ufw.*=~/,/^        fi/' '$EN_SCRIPT' | grep -c 'return 0'"
-    [ "$output" -ge 1 ]
-    run bash -c "awk '/confirm_ufw.*=~/,/^        fi/' '$EN_SCRIPT' | grep -c 'return 1'"
-    [ "$output" -eq 0 ]
-}

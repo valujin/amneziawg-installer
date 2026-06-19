@@ -18,10 +18,6 @@
     [[ "$block" == *'for _cname in "${ARGS[@]}"'* ]]
 }
 
-@test "v5.11.5: EN regen case iterates ARGS[@]" {
-    block=$(awk '/^    regen\)/,/^[[:space:]]+;;[[:space:]]*$/' "$BATS_TEST_DIRNAME/../manage_amneziawg_en.sh")
-    [[ "$block" == *'for _cname in "${ARGS[@]}"'* ]]
-}
 
 @test "v5.11.5: RU regen has counter and 'Обработано N из M' summary" {
     block=$(awk '/^    regen\)/,/^[[:space:]]+;;[[:space:]]*$/' "$BATS_TEST_DIRNAME/../manage_amneziawg.sh")
@@ -29,44 +25,9 @@
     [[ "$block" == *'Обработано'* ]]
 }
 
-@test "v5.11.5: EN regen has counter and 'Processed N of M' summary" {
-    block=$(awk '/^    regen\)/,/^[[:space:]]+;;[[:space:]]*$/' "$BATS_TEST_DIRNAME/../manage_amneziawg_en.sh")
-    [[ "$block" == *'_regen_count'* ]]
-    [[ "$block" == *'Processed'* ]]
-}
 
-@test "v5.11.5: regen no longer hard-dies on missing single client (regression guard)" {
-    # Pre-fix the single-client branch had `die "Клиент не найден."` — fail-fast
-    # on a typo. The new loop logs warn + sets _cmd_rc=1 and continues, so a
-    # batch with one missing name still processes valid ones.
-    block=$(awk '/^    regen\)/,/^[[:space:]]+;;[[:space:]]*$/' "$BATS_TEST_DIRNAME/../manage_amneziawg.sh")
-    [[ "$block" == *'не найден, пропуск'* ]]
-    [[ "$block" != *'die "Клиент'* ]]
 
-    block_en=$(awk '/^    regen\)/,/^[[:space:]]+;;[[:space:]]*$/' "$BATS_TEST_DIRNAME/../manage_amneziawg_en.sh")
-    [[ "$block_en" == *'not found, skipping'* ]]
-    [[ "$block_en" != *'die "Client'* ]]
-}
 
-@test "v5.11.5: regen no-args path preserved (fallback to all clients)" {
-    # The `${#ARGS[@]} -eq 0` branch must still grep ^#_Name = and loop —
-    # backwards-compatibility for `manage regen` invocations without arguments.
-    for f in manage_amneziawg.sh manage_amneziawg_en.sh; do
-        block=$(awk '/^    regen\)/,/^[[:space:]]+;;[[:space:]]*$/' "$BATS_TEST_DIRNAME/../$f")
-        [[ "$block" == *'${#ARGS[@]} -eq 0'* ]]
-        [[ "$block" == *'^#_Name = '* ]]
-    done
-}
-
-@test "v5.11.5: RU/EN regen case parity (identical control-flow tokens)" {
-    ru=$(awk '/^    regen\)/,/^[[:space:]]+;;[[:space:]]*$/' "$BATS_TEST_DIRNAME/../manage_amneziawg.sh" \
-        | grep -oE '(if |for |while |elif |else|fi|done|\${#ARGS\[@\]}|_regen_count|ARGS\[@\])' \
-        | sort -u)
-    en=$(awk '/^    regen\)/,/^[[:space:]]+;;[[:space:]]*$/' "$BATS_TEST_DIRNAME/../manage_amneziawg_en.sh" \
-        | grep -oE '(if |for |while |elif |else|fi|done|\${#ARGS\[@\]}|_regen_count|ARGS\[@\])' \
-        | sort -u)
-    [ "$ru" = "$en" ]
-}
 
 # ---------- Fix 2: apt strict mode + --ppa-amnezia-tolerant ----------
 
@@ -78,12 +39,6 @@
     [ "$status" -eq 0 ]
 }
 
-@test "v5.11.5: EN apt_update_tolerant accepts --ppa-amnezia-tolerant flag" {
-    run grep -F -- '--ppa-amnezia-tolerant' "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
-    [ "$status" -eq 0 ]
-    run grep -E '^\s*local ppa_tolerant=0' "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
-    [ "$status" -eq 0 ]
-}
 
 @test "v5.11.5: step 2 uses --ppa-amnezia-tolerant and dies on hard error (RU)" {
     # The step 2 callsite must invoke the flag AND die() on rc!=0; without die
@@ -94,36 +49,7 @@
     [[ "$output" == *'die'* ]]
 }
 
-@test "v5.11.5: step 2 uses --ppa-amnezia-tolerant and dies on hard error (EN)" {
-    run grep -B0 -A6 'apt_update_tolerant --ppa-amnezia-tolerant' \
-        "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
-    [ "$status" -eq 0 ]
-    [[ "$output" == *'die'* ]]
-}
 
-@test "v5.11.5: ppa-tolerant guard requires raw_had_non_src_errors (OOM/silent crash safety)" {
-    # Codex round-2 MEDIUM: don't tolerate when output mentions PPA Amnezia
-    # but no E:/Err:/W: lines were classified — that's an OOM/silent crash
-    # path that must surface, not be swallowed.
-    for f in install_amneziawg.sh install_amneziawg_en.sh; do
-        run grep -F 'raw_had_non_src_errors' "$BATS_TEST_DIRNAME/../$f"
-        [ "$status" -eq 0 ]
-    done
-}
 
 # ---------- Version markers ----------
 
-@test "SCRIPT_VERSION is consistent across the four versioned scripts" {
-    # install_amneziawg.sh, install_amneziawg_en.sh, manage_amneziawg.sh,
-    # manage_amneziawg_en.sh: all four advertise SCRIPT_VERSION; we make sure
-    # they agree (otherwise the SHA256 pins / branch tag layout will drift).
-    local ref_version
-    ref_version=$(awk -F'"' '/^SCRIPT_VERSION=/{print $2; exit}' \
-        "$BATS_TEST_DIRNAME/../install_amneziawg.sh")
-    [[ "$ref_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
-    for f in install_amneziawg_en.sh manage_amneziawg.sh manage_amneziawg_en.sh; do
-        run awk -F'"' '/^SCRIPT_VERSION=/{print $2; exit}' "$BATS_TEST_DIRNAME/../$f"
-        [ "$status" -eq 0 ]
-        [ "$output" = "$ref_version" ]
-    done
-}

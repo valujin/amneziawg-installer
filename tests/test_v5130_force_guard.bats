@@ -49,39 +49,11 @@
 
 # ---------- structural: EN script ----------
 
-@test "v5.13.0: EN install has --force flag in CLI parser" {
-    grep -qE '\-\-force\|-f\).*FORCE_REINSTALL=1' \
-        "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
-}
 
-@test "v5.13.0: EN install initializes FORCE_REINSTALL=0" {
-    grep -qE '^FORCE_REINSTALL=0\b' \
-        "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
-}
 
-@test "v5.13.0: EN install reads AWG_FORCE_REINSTALL from env" {
-    grep -q 'AWG_FORCE_REINSTALL:-0' \
-        "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
-}
 
-@test "v5.13.0: EN install guard checks SERVER_CONF_FILE + service active" {
-    grep -q '\-f "\$SERVER_CONF_FILE"' \
-        "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
-    grep -q 'systemctl is-active --quiet awg-quick@awg0' \
-        "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
-}
 
-@test "v5.13.0: EN install guard message is in English and mentions --force" {
-    grep -q 'AmneziaWG is already installed and running' \
-        "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
-    grep -q 'AWG_FORCE_REINSTALL=1' \
-        "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
-}
 
-@test "v5.13.0: EN install help mentions --force" {
-    grep -q -- '-f, --force' \
-        "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
-}
 
 # ---------- functional: guard decision matrix ----------
 
@@ -151,11 +123,3 @@ run_guard() {
 
 # ---------- structural parity ----------
 
-@test "v5.13.0: RU/EN install guard structure has parity" {
-    ru_count=$(grep -c 'FORCE_REINSTALL' \
-        "$BATS_TEST_DIRNAME/../install_amneziawg.sh")
-    en_count=$(grep -c 'FORCE_REINSTALL' \
-        "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh")
-    [ "$ru_count" -eq "$en_count" ]
-    [ "$ru_count" -ge 4 ]   # init + CLI flag + env bridge + guard
-}

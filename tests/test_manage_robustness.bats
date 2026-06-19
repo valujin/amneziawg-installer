@@ -18,13 +18,9 @@
 
 setup() {
     MANAGE_RU="${BATS_TEST_DIRNAME}/../manage_amneziawg.sh"
-    MANAGE_EN="${BATS_TEST_DIRNAME}/../manage_amneziawg_en.sh"
     COMMON_RU="${BATS_TEST_DIRNAME}/../awg_common.sh"
-    COMMON_EN="${BATS_TEST_DIRNAME}/../awg_common_en.sh"
     [ -f "$MANAGE_RU" ] || { echo "manage_amneziawg.sh missing" >&2; return 1; }
-    [ -f "$MANAGE_EN" ] || { echo "manage_amneziawg_en.sh missing" >&2; return 1; }
     [ -f "$COMMON_RU" ] || { echo "awg_common.sh missing" >&2; return 1; }
-    [ -f "$COMMON_EN" ] || { echo "awg_common_en.sh missing" >&2; return 1; }
 }
 
 # Extract the body of a named top-level function via sed range.
@@ -44,11 +40,6 @@ extract_func() {
     [[ "$output" == *'LAST_BACKUP_PATH="$bf"'* ]]
 }
 
-@test "A1.1: _backup_configs_nolock EN defines LAST_BACKUP_PATH on success" {
-    run extract_func "$MANAGE_EN" "_backup_configs_nolock"
-    [ "$status" -eq 0 ]
-    [[ "$output" == *'LAST_BACKUP_PATH="$bf"'* ]]
-}
 
 @test "A1.1: RU uses compgen -G for glob pattern presence checks" {
     local body
@@ -59,13 +50,6 @@ extract_func() {
     [ "$count" -ge 3 ]
 }
 
-@test "A1.1: EN uses compgen -G for glob pattern presence checks" {
-    local body
-    body=$(extract_func "$MANAGE_EN" "_backup_configs_nolock")
-    local count
-    count=$(grep -c 'compgen -G' <<< "$body")
-    [ "$count" -ge 3 ]
-}
 
 @test "A1.1: RU removes silent '|| true' from critical paths" {
     local body
@@ -80,14 +64,6 @@ extract_func() {
     run grep -qE 'cp -a "\$CONFIG_FILE".*\|\| true' <<< "$body"; [ "$status" -ne 0 ]
 }
 
-@test "A1.1: EN removes silent '|| true' from critical paths" {
-    local body
-    body=$(extract_func "$MANAGE_EN" "_backup_configs_nolock")
-    run grep -qE 'cp -a "\$KEYS_DIR"/\*.*\|\| true' <<< "$body"; [ "$status" -ne 0 ]
-    run grep -qE 'cp -a "\$AWG_DIR/server_private\.key".*\|\| true' <<< "$body"; [ "$status" -ne 0 ]
-    run grep -qE 'cp -a "\$AWG_DIR/server_public\.key".*\|\| true' <<< "$body"; [ "$status" -ne 0 ]
-    run grep -qE 'cp -a "\$CONFIG_FILE".*\|\| true' <<< "$body"; [ "$status" -ne 0 ]
-}
 
 @test "A1.1: RU returns 1 (not die) on critical cp failure inside function" {
     local body
@@ -99,13 +75,6 @@ extract_func() {
     [ "$ret_count" -ge 4 ]
 }
 
-@test "A1.1: EN returns 1 (not die) on critical cp failure inside function" {
-    local body
-    body=$(extract_func "$MANAGE_EN" "_backup_configs_nolock")
-    local ret_count
-    ret_count=$(grep -c 'return 1' <<< "$body")
-    [ "$ret_count" -ge 4 ]
-}
 
 # -------------------------------------------------------------------------
 # A5.2 — modify_client backup gate
@@ -120,12 +89,6 @@ extract_func() {
     grep -E 'if ! cp "\$cf" "\$bak"' <<< "$body"
 }
 
-@test "A5.2: EN modify_client aborts if backup cp fails" {
-    local body
-    body=$(extract_func "$MANAGE_EN" "modify_client")
-    run grep -qE 'cp "\$cf" "\$bak" \|\| log_warn' <<< "$body"; [ "$status" -ne 0 ]
-    grep -E 'if ! cp "\$cf" "\$bak"' <<< "$body"
-}
 
 @test "A5.2: RU modify_client releases modify_lock_fd on backup-gate abort" {
     local body
@@ -150,12 +113,6 @@ extract_func() {
         head -6 | grep -qE 'exec \{modify_lock_fd\}>&-'
 }
 
-@test "Q5: EN modify_client releases modify_lock_fd on flock timeout" {
-    local body
-    body=$(extract_func "$MANAGE_EN" "modify_client")
-    awk '/flock -x -w 10 "\$modify_lock_fd"/,/^    fi/ { print }' <<< "$body" | \
-        head -6 | grep -qE 'exec \{modify_lock_fd\}>&-'
-}
 
 # -------------------------------------------------------------------------
 # A5.3 — regenerate_client lock + sed -i checks
@@ -168,12 +125,6 @@ extract_func() {
     grep -qE '\.awg_config\.lock' <<< "$body"
 }
 
-@test "A5.3: EN regenerate_client acquires .awg_config.lock" {
-    local body
-    body=$(extract_func "$COMMON_EN" "regenerate_client")
-    grep -qE 'flock -x -w .* "\$lock_fd"' <<< "$body"
-    grep -qE '\.awg_config\.lock' <<< "$body"
-}
 
 @test "A5.3: RU regenerate_client checks each sed -i return" {
     local body
@@ -185,13 +136,6 @@ extract_func() {
     [ "$count" -eq 3 ]
 }
 
-@test "A5.3: EN regenerate_client checks each sed -i return" {
-    local body
-    body=$(extract_func "$COMMON_EN" "regenerate_client")
-    local count
-    count=$(grep -cE 'if ! sed -i ' <<< "$body")
-    [ "$count" -eq 3 ]
-}
 
 @test "A5.3: RU regenerate_client has NO unchecked bare sed -i" {
     local body
@@ -202,11 +146,6 @@ extract_func() {
     run grep -qE '^    sed -i ' <<< "$body"; [ "$status" -ne 0 ]
 }
 
-@test "A5.3: EN regenerate_client has NO unchecked bare sed -i" {
-    local body
-    body=$(extract_func "$COMMON_EN" "regenerate_client")
-    run grep -qE '^    sed -i ' <<< "$body"; [ "$status" -ne 0 ]
-}
 
 @test "A5.3: RU regenerate_client releases lock before QR generation" {
     local body
@@ -219,13 +158,6 @@ extract_func() {
     grep -qE 'exec \{lock_fd\}>&-' <<< "$tail"
 }
 
-@test "A5.3: EN regenerate_client releases lock before QR generation" {
-    local body
-    body=$(extract_func "$COMMON_EN" "regenerate_client")
-    local tail
-    tail=$(awk '/if ! sed -i "s\|/,/generate_qr/' <<< "$body" | tail -n 20)
-    grep -qE 'exec \{lock_fd\}>&-' <<< "$tail"
-}
 
 # -------------------------------------------------------------------------
 # Dynamic tests — run the extracted _backup_configs_nolock in a sandbox

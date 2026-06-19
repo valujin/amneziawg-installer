@@ -29,6 +29,10 @@ COMMON_SCRIPT_URL="https://raw.githubusercontent.com/valujin/amneziawg-installer
 COMMON_SCRIPT_PATH="$AWG_DIR/awg_common.sh"
 MANAGE_SCRIPT_URL="https://raw.githubusercontent.com/valujin/amneziawg-installer/${AWG_BRANCH}/manage_amneziawg.sh"
 MANAGE_SCRIPT_PATH="$AWG_DIR/manage_amneziawg.sh"
+# Каскад (multi-hop): движок маршрутизации + systemd-юнит. Скачиваются best-effort
+# (см. step5); нужны только для роли entry, разворачиваются при 'manage add-exit'.
+AWG_ROUTING_URL="https://raw.githubusercontent.com/valujin/amneziawg-installer/${AWG_BRANCH}/awg-routing.sh"
+AWG_ROUTING_UNIT_URL="https://raw.githubusercontent.com/valujin/amneziawg-installer/${AWG_BRANCH}/awg-routing.service"
 
 # SHA256 checksums скачиваемых скриптов. Обновляются при каждом релизе.
 # Проверяются в step5_download_scripts() после curl.
@@ -81,10 +85,19 @@ while [[ $# -gt 0 ]]; do
         --jmax=*)        CLI_JMAX="${1#*=}" ;;
         --conf=*)        CLI_CONF="${1#*=}" ;;
         --no-reboot)     NO_REBOOT=1 ;;
+        --role=*)        CLI_ROLE="${1#*=}" ;;
         *) echo "Неизвестный аргумент: $1"; HELP=1 ;;
     esac
     shift
 done
+
+# Роль сервера в каскаде: standalone (умолч.) | entry (вход, РФ) | exit (выход).
+# Влияет на awgsetup_cfg.init (AWG_ROLE) и на доступность каскадных команд.
+AWG_ROLE="${CLI_ROLE:-standalone}"
+case "$AWG_ROLE" in
+    standalone|entry|exit) ;;
+    *) echo "Неверная роль: '$AWG_ROLE' (допустимо: standalone|entry|exit)"; HELP=1 ;;
+esac
 
 # ==============================================================================
 # Функции логирования
@@ -267,6 +280,8 @@ show_help() {
   --route-amnezia       Использовать режим 'Amnezia' неинтерактивно
   --route-custom=СЕТИ   Использовать режим 'Пользовательский' неинтерактивно
   --endpoint=IP         Указать внешний IP сервера (для серверов за NAT)
+  --role=РОЛЬ           Роль в каскаде: standalone (умолч.) | entry (вход, РФ) | exit (выход).
+                        entry включает каскадную маршрутизацию (см. 'manage add-exit').
   -y, --yes             Автоматическое подтверждение (перезагрузки, UFW и т.д.)
   -f, --force           Принудительная переустановка поверх уже работающего AmneziaWG
                         (по умолчанию запуск на сконфигурированном сервере прерывается;
@@ -1966,6 +1981,7 @@ export AWG_I5='${AWG_I5}'
 export AWG_PRESET='${AWG_PRESET:-default}'
 export NO_TWEAKS=${NO_TWEAKS}
 export AWG_APPLY_MODE='${AWG_APPLY_MODE:-syncconf}'
+export AWG_ROLE='${AWG_ROLE:-standalone}'
 EOF
     if ! mv "$temp_conf" "$CONFIG_FILE"; then
         rm -f "$temp_conf"
@@ -2837,6 +2853,19 @@ step5_download_scripts() {
     log "Скачивание $MANAGE_SCRIPT_PATH..."
     _secure_download "$MANAGE_SCRIPT_URL" "$MANAGE_SCRIPT_PATH" \
         "$MANAGE_SCRIPT_SHA256" "manage_amneziawg.sh"
+
+    # Каскад (best-effort, не критично для одиночного сервера): движок маршрутизации
+    # + systemd-юнит кладём в $AWG_DIR. Развернёт их 'manage add-exit'
+    # (cascade_ensure_routing_installed). На ветках без этих файлов — просто warning.
+    log "Скачивание awg-routing.sh (каскад, best-effort)..."
+    if curl -fLso "$AWG_DIR/awg-routing.sh" --max-time 60 --retry 2 "$AWG_ROUTING_URL" 2>/dev/null; then
+        chmod 700 "$AWG_DIR/awg-routing.sh" 2>/dev/null || true
+        curl -fLso "$AWG_DIR/awg-routing.service" --max-time 60 --retry 2 "$AWG_ROUTING_UNIT_URL" 2>/dev/null || true
+        log "Каскадный движок загружен (доступен через 'manage add-exit')."
+    else
+        rm -f "$AWG_DIR/awg-routing.sh" 2>/dev/null || true
+        log_warn "awg-routing.sh недоступен на ветке ${AWG_BRANCH} — каскад будет недоступен (не критично для одиночного сервера)."
+    fi
 
     log "Шаг 5 завершен."
     update_state 6

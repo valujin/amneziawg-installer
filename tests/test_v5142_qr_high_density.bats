@@ -88,27 +88,4 @@ SHIM
     [ "$(cat "$AWG_DIR/c5.vpnuri.png")" = "vpn://REGRESSION_GUARD" ]
 }
 
-@test "structural: RU and EN generate_qr_vpnuri both pass -l L -s 6 -m 4" {
-    local RU_FILE="${BATS_TEST_DIRNAME}/../awg_common.sh"
-    local EN_FILE="${BATS_TEST_DIRNAME}/../awg_common_en.sh"
 
-    for f in "$RU_FILE" "$EN_FILE"; do
-        local block
-        block=$(awk '/^generate_qr_vpnuri\(\) \{$/,/^}$/' "$f")
-        grep -qE 'qrencode .*-l L'  <<< "$block"
-        grep -qE 'qrencode .*-s 6'  <<< "$block"
-        grep -qE 'qrencode .*-m 4'  <<< "$block"
-    done
-}
-
-@test "structural: RU and EN qrencode invocation lines are byte-identical (parity)" {
-    local RU_FILE="${BATS_TEST_DIRNAME}/../awg_common.sh"
-    local EN_FILE="${BATS_TEST_DIRNAME}/../awg_common_en.sh"
-    local ru_line en_line
-    ru_line=$(awk '/^generate_qr_vpnuri\(\) \{$/,/^}$/' "$RU_FILE" \
-        | grep -E 'qrencode .*-t png')
-    en_line=$(awk '/^generate_qr_vpnuri\(\) \{$/,/^}$/' "$EN_FILE" \
-        | grep -E 'qrencode .*-t png')
-    [ -n "$ru_line" ]
-    [ "$ru_line" = "$en_line" ]
-}

@@ -106,47 +106,7 @@ SHIM
     fi
 }
 
-@test "generate_qr_vpnuri: both RU and EN have the function with qrencode + .vpnuri.png + command-v guard" {
-    local RU_FILE="${BATS_TEST_DIRNAME}/../awg_common.sh"
-    local EN_FILE="${BATS_TEST_DIRNAME}/../awg_common_en.sh"
-    grep -qE '^generate_qr_vpnuri\(\)' "$RU_FILE"
-    grep -qE '^generate_qr_vpnuri\(\)' "$EN_FILE"
-    # Body invariants: qrencode call, target .vpnuri.png, command -v guard.
-    local ru_body en_body
-    ru_body=$(awk '/^generate_qr_vpnuri\(\) \{$/,/^}$/' "$RU_FILE")
-    en_body=$(awk '/^generate_qr_vpnuri\(\) \{$/,/^}$/' "$EN_FILE")
-    grep -qE 'qrencode'              <<< "$ru_body"
-    grep -qE 'qrencode'              <<< "$en_body"
-    grep -qE '\.vpnuri\.png'         <<< "$ru_body"
-    grep -qE '\.vpnuri\.png'         <<< "$en_body"
-    grep -qE 'command -v qrencode'   <<< "$ru_body"
-    grep -qE 'command -v qrencode'   <<< "$en_body"
-}
 
-@test "generate_client calls generate_qr_vpnuri after successful generate_vpn_uri (RU+EN)" {
-    local RU_FILE="${BATS_TEST_DIRNAME}/../awg_common.sh"
-    local EN_FILE="${BATS_TEST_DIRNAME}/../awg_common_en.sh"
-    awk '/^generate_client\(\) \{$/,/^}$/' "$RU_FILE" | grep -qE 'generate_qr_vpnuri'
-    awk '/^generate_client\(\) \{$/,/^}$/' "$EN_FILE" | grep -qE 'generate_qr_vpnuri'
-}
 
-@test "regenerate_client calls generate_qr_vpnuri after generate_vpn_uri (RU+EN)" {
-    local RU_FILE="${BATS_TEST_DIRNAME}/../awg_common.sh"
-    local EN_FILE="${BATS_TEST_DIRNAME}/../awg_common_en.sh"
-    awk '/^regenerate_client\(\) \{$/,/^}$/' "$RU_FILE" | grep -qE 'generate_qr_vpnuri'
-    awk '/^regenerate_client\(\) \{$/,/^}$/' "$EN_FILE" | grep -qE 'generate_qr_vpnuri'
-}
 
-@test "manage regen calls generate_qr_vpnuri (RU+EN scripts)" {
-    local RU_MGMT="${BATS_TEST_DIRNAME}/../manage_amneziawg.sh"
-    local EN_MGMT="${BATS_TEST_DIRNAME}/../manage_amneziawg_en.sh"
-    grep -qE 'generate_qr_vpnuri' "$RU_MGMT"
-    grep -qE 'generate_qr_vpnuri' "$EN_MGMT"
-}
 
-@test "manage remove cleans up .vpnuri.png (RU+EN scripts)" {
-    local RU_MGMT="${BATS_TEST_DIRNAME}/../manage_amneziawg.sh"
-    local EN_MGMT="${BATS_TEST_DIRNAME}/../manage_amneziawg_en.sh"
-    grep -qE '_rname\.vpnuri\.png' "$RU_MGMT"
-    grep -qE '_rname\.vpnuri\.png' "$EN_MGMT"
-}

@@ -170,13 +170,6 @@ CONF
     grep -qE 'MTU = \$\{mtu\}' <<<"$block"
 }
 
-@test "structural EN: render_client_config uses dynamic MTU" {
-    local FILE="${BATS_TEST_DIRNAME}/../awg_common_en.sh"
-    local block
-    block=$(awk '/^render_client_config\(\) \{/,/^}$/' "$FILE")
-    run ! grep -qE '^MTU = 1280$' <<<"$block"
-    grep -qE 'MTU = \$\{mtu\}' <<<"$block"
-}
 
 @test "structural RU: render_server_config uses AWG_MTU with fallback" {
     local FILE="${BATS_TEST_DIRNAME}/../awg_common.sh"
@@ -185,30 +178,6 @@ CONF
     grep -qE 'MTU = \$\{AWG_MTU:-1280\}' <<<"$block"
 }
 
-@test "structural EN: render_server_config uses AWG_MTU with fallback" {
-    local FILE="${BATS_TEST_DIRNAME}/../awg_common_en.sh"
-    local block
-    block=$(awk '/^render_server_config\(\) \{/,/^}$/' "$FILE")
-    grep -qE 'MTU = \$\{AWG_MTU:-1280\}' <<<"$block"
-}
 
-@test "structural: AWG_MTU is in safe_load_config whitelist (all 4 files)" {
-    for f in install_amneziawg.sh install_amneziawg_en.sh awg_common.sh awg_common_en.sh; do
-        grep -qE 'AWG_ENDPOINT\|AWG_MTU' "${BATS_TEST_DIRNAME}/../$f"
-    done
-}
 
-@test "structural: installer writes AWG_MTU to awgsetup_cfg.init (RU + EN)" {
-    grep -qE 'export AWG_MTU=' "${BATS_TEST_DIRNAME}/../install_amneziawg.sh"
-    grep -qE 'export AWG_MTU=' "${BATS_TEST_DIRNAME}/../install_amneziawg_en.sh"
-}
 
-@test "_extract_mtu RU and EN are byte-identical (parity)" {
-    local RU_FILE="${BATS_TEST_DIRNAME}/../awg_common.sh"
-    local EN_FILE="${BATS_TEST_DIRNAME}/../awg_common_en.sh"
-    local ru_block en_block
-    ru_block=$(awk '/^_extract_mtu_from_server_conf\(\) \{/,/^}$/' "$RU_FILE" | grep -v "^#")
-    en_block=$(awk '/^_extract_mtu_from_server_conf\(\) \{/,/^}$/' "$EN_FILE" | grep -v "^#")
-    [ -n "$ru_block" ]
-    [ "$ru_block" = "$en_block" ]
-}

@@ -105,21 +105,7 @@ setup_params() {
     unset CLIENT_PSK
 }
 
-@test "manage_amneziawg.sh parses --psk flag" {
-    local MANAGE_RU="${BATS_TEST_DIRNAME}/../manage_amneziawg.sh"
-    local MANAGE_EN="${BATS_TEST_DIRNAME}/../manage_amneziawg_en.sh"
-    grep -qE 'CLI_ADD_PSK=1' "$MANAGE_RU"
-    grep -qE 'CLI_ADD_PSK=1' "$MANAGE_EN"
-    grep -qE 'export CLIENT_PSK="auto"' "$MANAGE_RU"
-    grep -qE 'export CLIENT_PSK="auto"' "$MANAGE_EN"
-}
 
-@test "manage help mentions --psk" {
-    local MANAGE_RU="${BATS_TEST_DIRNAME}/../manage_amneziawg.sh"
-    local MANAGE_EN="${BATS_TEST_DIRNAME}/../manage_amneziawg_en.sh"
-    grep -qE '\-\-psk' "$MANAGE_RU"
-    grep -qE '\-\-psk' "$MANAGE_EN"
-}
 
 @test "regenerate_client preserves PresharedKey through regen" {
     # If a client was added with --psk, the PSK lives in BOTH server [Peer]

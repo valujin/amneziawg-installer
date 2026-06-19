@@ -12,10 +12,6 @@
     [ "$status" -eq 0 ]
 }
 
-@test "EN manage: backup timestamp uses millisecond precision (.%3N)" {
-    run grep -E 'date \+%F_%H-%M-%S\.%3N' "$BATS_TEST_DIRNAME/../manage_amneziawg_en.sh"
-    [ "$status" -eq 0 ]
-}
 
 @test "date +%3N produces millisecond-distinct values under rapid fire" {
     # Sample 10 calls in a tight loop and require at least 2 distinct values.
@@ -75,8 +71,3 @@
     rm -rf "$bd"
 }
 
-@test "RU/EN parity: backup timestamp line identical" {
-    ru=$(grep -E 'ts=\$\(date \+%F_%H-%M-%S' "$BATS_TEST_DIRNAME/../manage_amneziawg.sh" | head -1 | tr -d ' \t')
-    en=$(grep -E 'ts=\$\(date \+%F_%H-%M-%S' "$BATS_TEST_DIRNAME/../manage_amneziawg_en.sh" | head -1 | tr -d ' \t')
-    [ "$ru" = "$en" ]
-}

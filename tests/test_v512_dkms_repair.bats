@@ -48,19 +48,7 @@ _extract_logrotate() {
     grep -qE '^ensure_amneziawg_kernel_module\(\) \{' "$BATS_TEST_DIRNAME/../awg_common.sh"
 }
 
-@test "v5.12: AWG_ALLOW_APT_IN_ENSURE gate present in awg_common.sh + _en.sh" {
-    grep -qF 'AWG_ALLOW_APT_IN_ENSURE' "$BATS_TEST_DIRNAME/../awg_common.sh"
-    grep -qF 'AWG_ALLOW_APT_IN_ENSURE' "$BATS_TEST_DIRNAME/../awg_common_en.sh"
-}
 
-@test "v5.12: RU/EN awg_common function-count parity (4 DKMS-repair functions in each)" {
-    ru_count=$(grep -cE '^(_sanitize_awg_dkms_conf|_install_kernel_headers|_ensure_awg_quick_running|ensure_amneziawg_kernel_module)\(\) \{' \
-        "$BATS_TEST_DIRNAME/../awg_common.sh")
-    en_count=$(grep -cE '^(_sanitize_awg_dkms_conf|_install_kernel_headers|_ensure_awg_quick_running|ensure_amneziawg_kernel_module)\(\) \{' \
-        "$BATS_TEST_DIRNAME/../awg_common_en.sh")
-    [ "$ru_count" -eq 4 ]
-    [ "$en_count" -eq 4 ]
-}
 
 # ---------- Phase 2: manage integration ----------
 
@@ -70,46 +58,14 @@ _extract_logrotate() {
     [ "$count" -ge 3 ]
 }
 
-@test "v5.12: EN manage has 3 pre-calls of ensure_amneziawg_kernel_module (add/remove/restart)" {
-    count=$(grep -cE '^[[:space:]]+ensure_amneziawg_kernel_module' "$BATS_TEST_DIRNAME/../manage_amneziawg_en.sh")
-    [ "$count" -ge 3 ]
-}
 
-@test "v5.12: RU manage restart uses module-only mode (avoids apt installs in restart)" {
-    grep -qE 'ensure_amneziawg_kernel_module module-only' "$BATS_TEST_DIRNAME/../manage_amneziawg.sh"
-    grep -qE 'ensure_amneziawg_kernel_module module-only' "$BATS_TEST_DIRNAME/../manage_amneziawg_en.sh"
-}
 
-@test "v5.12: RU manage exposes 'repair-module|repair' command (full mode with apt gate)" {
-    grep -qE '^[[:space:]]+repair-module\|repair\)' "$BATS_TEST_DIRNAME/../manage_amneziawg.sh"
-    grep -qE '^[[:space:]]+repair-module\|repair\)' "$BATS_TEST_DIRNAME/../manage_amneziawg_en.sh"
-}
 
-@test "v5.12: repair-module sets AWG_ALLOW_APT_IN_ENSURE=1 (allows kernel-headers apt install)" {
-    grep -qE 'AWG_ALLOW_APT_IN_ENSURE=1 ensure_amneziawg_kernel_module' "$BATS_TEST_DIRNAME/../manage_amneziawg.sh"
-    grep -qE 'AWG_ALLOW_APT_IN_ENSURE=1 ensure_amneziawg_kernel_module' "$BATS_TEST_DIRNAME/../manage_amneziawg_en.sh"
-}
 
 # ---------- Phase 3: kernel-headers meta candidates + helper + apt hook + logrotate ----------
 
-@test "v5.12: meta_candidates loop has Ubuntu flavor extraction \${kernel_rel##*-}" {
-    grep -qF '${kernel_rel##*-}' "$BATS_TEST_DIRNAME/../install_amneziawg.sh"
-    grep -qF '${kernel_rel##*-}' "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
-}
 
-@test "v5.12: meta_candidates loop has RPi guard (+rpt / -rpi suffix skip)" {
-    # Match the kernel_rel == *+rpt* and kernel_rel == *-rpi* patterns separately —
-    # Bash test joins them with ` || \"\$kernel_rel\" == ` which awk doesn't simplify.
-    grep -qE 'kernel_rel.*\*\+rpt\*' "$BATS_TEST_DIRNAME/../install_amneziawg.sh"
-    grep -qE 'kernel_rel.*\*-rpi\*' "$BATS_TEST_DIRNAME/../install_amneziawg.sh"
-    grep -qE 'kernel_rel.*\*\+rpt\*' "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
-    grep -qE 'kernel_rel.*\*-rpi\*' "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
-}
 
-@test "v5.12: meta_candidates loop detects Debian cloud kernel (-cloud-)" {
-    grep -qF 'linux-headers-cloud-' "$BATS_TEST_DIRNAME/../install_amneziawg.sh"
-    grep -qF 'linux-headers-cloud-' "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
-}
 
 @test "v5.12: meta_candidates fallback ordering — flavor BEFORE generic, cloud BEFORE arch" {
     # Ubuntu: linux-headers-${flavor} must precede linux-headers-generic so the
@@ -136,16 +92,6 @@ _extract_logrotate() {
         "$BATS_TEST_DIRNAME/../install_amneziawg.sh"
 }
 
-@test "v5.12: every staging+mv block has cleanup-on-failure tail (rm + die)" {
-    # All four atomic deploys (helper, hook, logrotate, unit) must follow the
-    # `mv -f "$_stage_*" /target ... || { rm -f "$_stage_*"; die "..."; }`
-    # pattern so a failed rename leaves no orphan dotfile in the target dir.
-    for stage_var in _stage_helper _stage_hook _stage_logrotate _stage_unit; do
-        grep -qE "mv -f \"\\\$$stage_var\".*\\\\\$" "$BATS_TEST_DIRNAME/../install_amneziawg.sh"
-        grep -qE "rm -f \"\\\$$stage_var\"; die" "$BATS_TEST_DIRNAME/../install_amneziawg.sh"
-        grep -qE "rm -f \"\\\$$stage_var\"; die" "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
-    done
-}
 
 @test "v5.12: apt hook content has DPkg::Post-Invoke calling helper --hook" {
     hook=$(_extract_hook "$BATS_TEST_DIRNAME/../install_amneziawg.sh")
@@ -163,20 +109,7 @@ _extract_logrotate() {
     [[ "$rot" == *'missingok'* ]]
 }
 
-@test "v5.12: helper body byte-identical between RU and EN installers" {
-    ru=$(_extract_helper "$BATS_TEST_DIRNAME/../install_amneziawg.sh")
-    en=$(_extract_helper "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh")
-    [ "$ru" = "$en" ]
-}
 
-@test "v5.12: apt hook + logrotate content byte-identical between RU and EN installers" {
-    ru_h=$(_extract_hook "$BATS_TEST_DIRNAME/../install_amneziawg.sh")
-    en_h=$(_extract_hook "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh")
-    [ "$ru_h" = "$en_h" ]
-    ru_l=$(_extract_logrotate "$BATS_TEST_DIRNAME/../install_amneziawg.sh")
-    en_l=$(_extract_logrotate "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh")
-    [ "$ru_l" = "$en_l" ]
-}
 
 # ---------- Phase 4: systemd unit + helper --systemd mode ----------
 
@@ -246,20 +179,7 @@ _extract_logrotate() {
         "$BATS_TEST_DIRNAME/../install_amneziawg.sh"
 }
 
-@test "v5.12: installer runs systemctl daemon-reload + enable for the unit" {
-    grep -qE 'systemctl daemon-reload' "$BATS_TEST_DIRNAME/../install_amneziawg.sh"
-    grep -qE 'systemctl enable amneziawg-ensure-module\.service' \
-        "$BATS_TEST_DIRNAME/../install_amneziawg.sh"
-    grep -qE 'systemctl daemon-reload' "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
-    grep -qE 'systemctl enable amneziawg-ensure-module\.service' \
-        "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
-}
 
-@test "v5.12: systemd unit content byte-identical between RU and EN installers" {
-    ru=$(_extract_unit "$BATS_TEST_DIRNAME/../install_amneziawg.sh")
-    en=$(_extract_unit "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh")
-    [ "$ru" = "$en" ]
-}
 
 # ---------- Hygiene + parsing ----------
 

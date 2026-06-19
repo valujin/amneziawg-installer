@@ -82,8 +82,8 @@ client_subnet() {
     addr=$(awk -F'=' '/^\[/{s=($0 ~ /^\[Interface\]/)} s && /^[[:space:]]*Address[[:space:]]*=/{gsub(/[[:space:]]/,"",$2); print $2; exit}' "$SERVER_CONF" 2>/dev/null)
     [[ -n "$addr" ]] || return 1
     # 172.16.17.1/24 -> 172.16.17.0/24 (zero the host part for a /24-style net)
-    local ip="${addr%/*}" mask="${addr#*/}" a b c d
-    IFS='.' read -r a b c d <<<"$ip"
+    local ip="${addr%/*}" mask="${addr#*/}" a b c
+    IFS='.' read -r a b c _ <<<"$ip"
     printf '%s.%s.%s.0/%s' "$a" "$b" "$c" "${mask:-24}"
 }
 

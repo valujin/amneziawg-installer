@@ -11,10 +11,8 @@
 setup() {
     WF="${BATS_TEST_DIRNAME}/../.github/workflows/arm-build.yml"
     INSTALL_RU="${BATS_TEST_DIRNAME}/../install_amneziawg.sh"
-    INSTALL_EN="${BATS_TEST_DIRNAME}/../install_amneziawg_en.sh"
     [ -f "$WF" ]         || { echo "arm-build.yml missing" >&2; return 1; }
     [ -f "$INSTALL_RU" ] || { echo "install_amneziawg.sh missing" >&2; return 1; }
-    [ -f "$INSTALL_EN" ] || { echo "install_amneziawg_en.sh missing" >&2; return 1; }
 }
 
 # -------------------------------------------------------------------------
@@ -63,20 +61,12 @@ setup() {
          grep -A1 '25\.10' | grep -qE 'target_id="ubuntu-2510-arm64"')
 }
 
-@test "install_amneziawg_en.sh maps 25.10 -> ubuntu-2510-arm64" {
-    awk '/^_try_install_prebuilt_arm\(\) \{$/,/^}$/' "$INSTALL_EN" | \
-        grep -A1 '25\.10' | grep -qE 'target_id="ubuntu-2510-arm64"'
-}
 
 @test "install_amneziawg.sh maps Debian 13 -> debian-trixie-arm64" {
     awk '/^_try_install_prebuilt_arm\(\) \{$/,/^}$/' "$INSTALL_RU" | \
         grep -A1 'OS_VERSION.*"13"' | grep -qE 'target_id="debian-trixie-arm64"'
 }
 
-@test "install_amneziawg_en.sh maps Debian 13 -> debian-trixie-arm64" {
-    awk '/^_try_install_prebuilt_arm\(\) \{$/,/^}$/' "$INSTALL_EN" | \
-        grep -A1 'OS_VERSION.*"13"' | grep -qE 'target_id="debian-trixie-arm64"'
-}
 
 @test "install_amneziawg.sh no longer maps 22.04 -> ubuntu-2204" {
     local body
@@ -85,12 +75,6 @@ setup() {
     run grep -qE 'OS_VERSION.*"22\.04"' <<< "$body"; [ "$status" -ne 0 ]
 }
 
-@test "install_amneziawg_en.sh no longer maps 22.04 -> ubuntu-2204" {
-    local body
-    body=$(awk '/^_try_install_prebuilt_arm\(\) \{$/,/^}$/' "$INSTALL_EN")
-    run grep -qE 'target_id="ubuntu-2204-arm64"' <<< "$body"; [ "$status" -ne 0 ]
-    run grep -qE 'OS_VERSION.*"22\.04"' <<< "$body"; [ "$status" -ne 0 ]
-}
 
 # -------------------------------------------------------------------------
 # Cross-file consistency — every target_id in installer has a matrix entry
@@ -125,11 +109,3 @@ setup() {
     done <<< "$ids"
 }
 
-@test "RU and EN installer have identical target_id mappings" {
-    local ru en
-    ru=$(awk '/^_try_install_prebuilt_arm\(\) \{$/,/^}$/' "$INSTALL_RU" | \
-         grep -oE 'target_id="[^"]+"' | sort -u)
-    en=$(awk '/^_try_install_prebuilt_arm\(\) \{$/,/^}$/' "$INSTALL_EN" | \
-         grep -oE 'target_id="[^"]+"' | sort -u)
-    [ "$ru" = "$en" ]
-}

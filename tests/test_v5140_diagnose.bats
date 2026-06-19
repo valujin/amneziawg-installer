@@ -15,23 +15,7 @@
     grep -qE "^_diag_line\(\) \{" "$FILE"
 }
 
-@test "diagnose: EN manage_amneziawg_en.sh defines diagnose_server() and helpers" {
-    local FILE="${BATS_TEST_DIRNAME}/../manage_amneziawg_en.sh"
-    grep -qE "^diagnose_server\(\) \{" "$FILE"
-    grep -qE "^_diagnose_carrier_known\(\) \{" "$FILE"
-    grep -qE "^_diagnose_carrier_list\(\) \{" "$FILE"
-    grep -qE "^_diag_line\(\) \{" "$FILE"
-}
 
-@test "diagnose: RU and EN agree on the carrier list" {
-    local RU_FILE="${BATS_TEST_DIRNAME}/../manage_amneziawg.sh"
-    local EN_FILE="${BATS_TEST_DIRNAME}/../manage_amneziawg_en.sh"
-    local ru_list en_list
-    ru_list=$(awk '/^_diagnose_carrier_list\(\) \{/,/^}$/' "$RU_FILE" | grep -oE 'beeline_msk|yota_msk|tele2_msk|tele2_krasnoyarsk|tattelecom|megafon_regions|tmobile_us' | sort -u)
-    en_list=$(awk '/^_diagnose_carrier_list\(\) \{/,/^}$/' "$EN_FILE" | grep -oE 'beeline_msk|yota_msk|tele2_msk|tele2_krasnoyarsk|tattelecom|megafon_regions|tmobile_us' | sort -u)
-    [ -n "$ru_list" ]
-    [ "$ru_list" = "$en_list" ]
-}
 
 @test "diagnose: --carrier=NAME is parsed in RU CLI" {
     local FILE="${BATS_TEST_DIRNAME}/../manage_amneziawg.sh"
@@ -39,21 +23,12 @@
     grep -qE '^CLI_CARRIER=""' "$FILE"
 }
 
-@test "diagnose: --carrier=NAME is parsed in EN CLI" {
-    local FILE="${BATS_TEST_DIRNAME}/../manage_amneziawg_en.sh"
-    grep -qE '^\s+--carrier=\*\)\s+CLI_CARRIER="\$\{1#\*=\}"; shift ;;' "$FILE"
-    grep -qE '^CLI_CARRIER=""' "$FILE"
-}
 
 @test "diagnose: 'diagnose' command is dispatched in RU" {
     local FILE="${BATS_TEST_DIRNAME}/../manage_amneziawg.sh"
     awk '/^case \$?\"?\$?COMMAND\"? in/,/^esac$/' "$FILE" | grep -qE '^\s+diagnose\)'
 }
 
-@test "diagnose: 'diagnose' command is dispatched in EN" {
-    local FILE="${BATS_TEST_DIRNAME}/../manage_amneziawg_en.sh"
-    awk '/^case \$?\"?\$?COMMAND\"? in/,/^esac$/' "$FILE" | grep -qE '^\s+diagnose\)'
-}
 
 # Functional: source the carrier helper from RU script and exercise it.
 _source_carrier_helper_ru() {
@@ -117,7 +92,3 @@ _source_carrier_helper_ru() {
     awk '/^usage\(\) \{/,/^}$/' "$FILE" | grep -qE 'diagnose'
 }
 
-@test "diagnose: usage help mentions diagnose command in EN" {
-    local FILE="${BATS_TEST_DIRNAME}/../manage_amneziawg_en.sh"
-    awk '/^usage\(\) \{/,/^}$/' "$FILE" | grep -qE 'diagnose'
-}

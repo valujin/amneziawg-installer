@@ -105,26 +105,10 @@ setup() {
     [ "$status" -eq 0 ]
 }
 
-@test "EN manage: CLI parser accepts --yes" {
-    run grep -E '^\s+--yes\)\s+CLI_YES=1' "$BATS_TEST_DIRNAME/../manage_amneziawg_en.sh"
-    [ "$status" -eq 0 ]
-}
 
 @test "RU manage: usage help mentions --yes and AWG_YES" {
     run grep -F -- '--yes' "$BATS_TEST_DIRNAME/../manage_amneziawg.sh"
     [[ "$output" == *"AWG_YES=1"* ]]
 }
 
-@test "EN manage: usage help mentions --yes and AWG_YES" {
-    run grep -F -- '--yes' "$BATS_TEST_DIRNAME/../manage_amneziawg_en.sh"
-    [[ "$output" == *"AWG_YES=1"* ]]
-}
 
-@test "RU/EN parity: CLI_YES/AWG_YES check has identical structure" {
-    # Strip comment lines (start with #) — only compare code identity.
-    ru_block=$(awk '/^confirm_action\(\) \{/,/^\}/' "$BATS_TEST_DIRNAME/../manage_amneziawg.sh" \
-        | grep -E 'CLI_YES|AWG_YES' | grep -vE '^\s*#')
-    en_block=$(awk '/^confirm_action\(\) \{/,/^\}/' "$BATS_TEST_DIRNAME/../manage_amneziawg_en.sh" \
-        | grep -E 'CLI_YES|AWG_YES' | grep -vE '^\s*#')
-    [ "$ru_block" = "$en_block" ]
-}

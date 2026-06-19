@@ -16,9 +16,7 @@
 
 setup() {
     MANAGE_RU="${BATS_TEST_DIRNAME}/../manage_amneziawg.sh"
-    MANAGE_EN="${BATS_TEST_DIRNAME}/../manage_amneziawg_en.sh"
     [ -f "$MANAGE_RU" ] || { echo "manage_amneziawg.sh missing" >&2; return 1; }
-    [ -f "$MANAGE_EN" ] || { echo "manage_amneziawg_en.sh missing" >&2; return 1; }
 }
 
 extract_func() {
@@ -37,12 +35,6 @@ extract_func() {
     [[ "$output" == *"_restore_do_rollback()"* ]]
 }
 
-@test "A5.1: EN _restore_do_rollback is defined" {
-    run extract_func "$MANAGE_EN" "_restore_do_rollback"
-    [ "$status" -eq 0 ]
-    [ -n "$output" ]
-    [[ "$output" == *"_restore_do_rollback()"* ]]
-}
 
 @test "A5.1: RU rollback restores all 5 standard locations" {
     local body
@@ -55,15 +47,6 @@ extract_func() {
     grep -qE 'server_public\.key' <<< "$body"
 }
 
-@test "A5.1: EN rollback restores all 5 standard locations" {
-    local body
-    body=$(extract_func "$MANAGE_EN" "_restore_do_rollback")
-    grep -qE '\$_rtd/server' <<< "$body"
-    grep -qE '\$_rtd/clients' <<< "$body"
-    grep -qE '\$_rtd/keys' <<< "$body"
-    grep -qE 'server_private\.key' <<< "$body"
-    grep -qE 'server_public\.key' <<< "$body"
-}
 
 @test "A5.1: RU rollback attempts systemctl start after file restoration" {
     local body
@@ -71,11 +54,6 @@ extract_func() {
     grep -qE 'systemctl start awg-quick@awg0' <<< "$body"
 }
 
-@test "A5.1: EN rollback attempts systemctl start after file restoration" {
-    local body
-    body=$(extract_func "$MANAGE_EN" "_restore_do_rollback")
-    grep -qE 'systemctl start awg-quick@awg0' <<< "$body"
-}
 
 # -------------------------------------------------------------------------
 # Structural checks — restore_backup integration with rollback
@@ -87,11 +65,6 @@ extract_func() {
     grep -qE 'trap _restore_cleanup RETURN' <<< "$body"
 }
 
-@test "A5.1: EN restore_backup registers trap RETURN for _restore_cleanup" {
-    local body
-    body=$(extract_func "$MANAGE_EN" "restore_backup")
-    grep -qE 'trap _restore_cleanup RETURN' <<< "$body"
-}
 
 @test "A5.1: RU restore_backup captures LAST_BACKUP_PATH after self-backup" {
     local body
@@ -99,11 +72,6 @@ extract_func() {
     grep -qE '_rollback_snap="\$\{LAST_BACKUP_PATH:-\}"' <<< "$body"
 }
 
-@test "A5.1: EN restore_backup captures LAST_BACKUP_PATH after self-backup" {
-    local body
-    body=$(extract_func "$MANAGE_EN" "restore_backup")
-    grep -qE '_rollback_snap="\$\{LAST_BACKUP_PATH:-\}"' <<< "$body"
-}
 
 @test "A5.1: RU restore_backup runs validate_awg_config before service start" {
     local body
@@ -119,16 +87,6 @@ extract_func() {
     [ "$vline" -lt "$sline" ]
 }
 
-@test "A5.1: EN restore_backup runs validate_awg_config before service start" {
-    local body
-    body=$(extract_func "$MANAGE_EN" "restore_backup")
-    local vline sline
-    vline=$(grep -n '! validate_awg_config' <<< "$body" | head -1 | cut -d: -f1)
-    sline=$(grep -n 'systemctl start awg-quick@awg0' <<< "$body" | tail -1 | cut -d: -f1)
-    [ -n "$vline" ]
-    [ -n "$sline" ]
-    [ "$vline" -lt "$sline" ]
-}
 
 @test "A5.1: RU restore_backup sets _restore_ok=1 before success return" {
     local body
@@ -136,11 +94,6 @@ extract_func() {
     grep -qE '_restore_ok=1' <<< "$body"
 }
 
-@test "A5.1: EN restore_backup sets _restore_ok=1 before success return" {
-    local body
-    body=$(extract_func "$MANAGE_EN" "restore_backup")
-    grep -qE '_restore_ok=1' <<< "$body"
-}
 
 @test "A5.1: RU _restore_cleanup invokes _restore_do_rollback only when not ok" {
     local body
@@ -150,11 +103,6 @@ extract_func() {
     grep -qE '_restore_ok -eq 0.*_destructive_ops_started -eq 1.*_rollback_snap' <<< "$body"
 }
 
-@test "A5.1: EN _restore_cleanup invokes _restore_do_rollback only when not ok" {
-    local body
-    body=$(extract_func "$MANAGE_EN" "restore_backup")
-    grep -qE '_restore_ok -eq 0.*_destructive_ops_started -eq 1.*_rollback_snap' <<< "$body"
-}
 
 # -------------------------------------------------------------------------
 # Post-audit fixes (Codex Q1/Q2/Q3)
@@ -168,11 +116,6 @@ extract_func() {
     grep -qE 'trap - RETURN' <<< "$body"
 }
 
-@test "Q1: EN _restore_cleanup clears RETURN trap to prevent global leak" {
-    local body
-    body=$(extract_func "$MANAGE_EN" "restore_backup")
-    grep -qE 'trap - RETURN' <<< "$body"
-}
 
 @test "Q2: RU restore_backup sets _destructive_ops_started after systemctl stop" {
     local body
@@ -188,16 +131,6 @@ extract_func() {
     [ "$dline" -gt "$sline" ]
 }
 
-@test "Q2: EN restore_backup sets _destructive_ops_started after systemctl stop" {
-    local body
-    body=$(extract_func "$MANAGE_EN" "restore_backup")
-    local sline dline
-    sline=$(grep -nE '^[[:space:]]+systemctl stop awg-quick@awg0' <<< "$body" | head -1 | cut -d: -f1)
-    dline=$(grep -nE '^[[:space:]]+_destructive_ops_started=1$' <<< "$body" | head -1 | cut -d: -f1)
-    [ -n "$sline" ]
-    [ -n "$dline" ]
-    [ "$dline" -gt "$sline" ]
-}
 
 @test "Q3: RU _backup_configs_nolock treats expiry/ as critical" {
     local body
@@ -208,12 +141,6 @@ extract_func() {
     grep -qE 'if ! cp -a "\$\{EXPIRY_DIR' <<< "$body"
 }
 
-@test "Q3: EN _backup_configs_nolock treats expiry/ as critical" {
-    local body
-    body=$(extract_func "$MANAGE_EN" "_backup_configs_nolock")
-    run grep -qE 'cp -a "\$\{EXPIRY_DIR.*\|\| log_warn' <<< "$body"; [ "$status" -ne 0 ]
-    grep -qE 'if ! cp -a "\$\{EXPIRY_DIR' <<< "$body"
-}
 
 @test "Q3: RU _backup_configs_nolock treats awg-expiry cron as critical" {
     local body
@@ -222,12 +149,6 @@ extract_func() {
     grep -qE 'if ! cp -a /etc/cron\.d/awg-expiry' <<< "$body"
 }
 
-@test "Q3: EN _backup_configs_nolock treats awg-expiry cron as critical" {
-    local body
-    body=$(extract_func "$MANAGE_EN" "_backup_configs_nolock")
-    run grep -qE 'cp -a /etc/cron\.d/awg-expiry.*\|\| log_warn' <<< "$body"; [ "$status" -ne 0 ]
-    grep -qE 'if ! cp -a /etc/cron\.d/awg-expiry' <<< "$body"
-}
 
 # -------------------------------------------------------------------------
 # Dynamic test — rollback file restoration (mocked systemctl)
@@ -295,19 +216,3 @@ rollback_teardown() {
     rollback_teardown
 }
 
-@test "dyn A5.1: _restore_do_rollback EN version also works identically" {
-    prepare_rollback_sandbox
-    local staging="$BATS_TMP/stage"
-    mkdir -p "$staging/server"
-    echo '[Interface]' > "$staging/server/awg0.conf"
-    local snap="$BATS_TMP/snap.tar.gz"
-    tar -czf "$snap" -C "$staging" .
-    rm -f "$SERVER_CONF_FILE"
-
-    # shellcheck disable=SC1090
-    source <(extract_func "$MANAGE_EN" "_restore_do_rollback")
-    run _restore_do_rollback "$snap"
-    [ "$status" -eq 0 ]
-    [ -f "$SERVER_CONF_FILE" ]
-    rollback_teardown
-}

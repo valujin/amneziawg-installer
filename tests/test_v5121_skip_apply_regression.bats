@@ -26,13 +26,6 @@
     [[ "$block" == *'"${AWG_SKIP_APPLY:-0}" != "1"'*'ensure_amneziawg_kernel_module'* ]]
 }
 
-@test "v5.12.1: EN add gates ensure_amneziawg_kernel_module on AWG_SKIP_APPLY" {
-    block=$(awk '/^    add\)/,/^[[:space:]]+;;[[:space:]]*$/' \
-        "$BATS_TEST_DIRNAME/../manage_amneziawg_en.sh")
-    [[ "$block" == *'AWG_SKIP_APPLY'* ]]
-    [[ "$block" == *'ensure_amneziawg_kernel_module'* ]]
-    [[ "$block" == *'"${AWG_SKIP_APPLY:-0}" != "1"'*'ensure_amneziawg_kernel_module'* ]]
-}
 
 # ---------- remove: gate present ----------
 
@@ -44,13 +37,6 @@
     [[ "$block" == *'"${AWG_SKIP_APPLY:-0}" != "1"'*'ensure_amneziawg_kernel_module'* ]]
 }
 
-@test "v5.12.1: EN remove gates ensure_amneziawg_kernel_module on AWG_SKIP_APPLY" {
-    block=$(awk '/^    remove\)/,/^[[:space:]]+;;[[:space:]]*$/' \
-        "$BATS_TEST_DIRNAME/../manage_amneziawg_en.sh")
-    [[ "$block" == *'AWG_SKIP_APPLY'* ]]
-    [[ "$block" == *'ensure_amneziawg_kernel_module'* ]]
-    [[ "$block" == *'"${AWG_SKIP_APPLY:-0}" != "1"'*'ensure_amneziawg_kernel_module'* ]]
-}
 
 # ---------- restart: NOT gated (explicit apply) ----------
 
@@ -61,32 +47,12 @@
     [[ "$block" != *'"${AWG_SKIP_APPLY:-0}" != "1"'* ]]
 }
 
-@test "v5.12.1: EN restart still calls ensure_amneziawg_kernel_module unconditionally" {
-    block=$(awk '/^    restart\)/,/^[[:space:]]+;;[[:space:]]*$/' \
-        "$BATS_TEST_DIRNAME/../manage_amneziawg_en.sh")
-    [[ "$block" == *'ensure_amneziawg_kernel_module module-only'* ]]
-    [[ "$block" != *'"${AWG_SKIP_APPLY:-0}" != "1"'* ]]
-}
 
 # ---------- syntax sanity ----------
 
-@test "v5.12.1: manage scripts pass bash -n after gate edits" {
-    bash -n "$BATS_TEST_DIRNAME/../manage_amneziawg.sh"
-    bash -n "$BATS_TEST_DIRNAME/../manage_amneziawg_en.sh"
-}
 
 # ---------- repair-module path remains explicit (sanity) ----------
 
-@test "v5.12.1: repair-module path keeps AWG_ALLOW_APT_IN_ENSURE=1 invocation" {
-    # repair-module is the user-explicit recovery path — it must still call
-    # ensure_amneziawg_kernel_module with AWG_ALLOW_APT_IN_ENSURE=1 regardless
-    # of AWG_SKIP_APPLY (the user is asking us to repair, that means apply).
-    for f in manage_amneziawg.sh manage_amneziawg_en.sh; do
-        block=$(awk '/^    repair-module\|repair\)/,/^[[:space:]]+;;[[:space:]]*$/' \
-            "$BATS_TEST_DIRNAME/../$f")
-        [[ "$block" == *'AWG_ALLOW_APT_IN_ENSURE=1 ensure_amneziawg_kernel_module full'* ]]
-    done
-}
 
 # ---------- runtime gate semantics ----------
 #

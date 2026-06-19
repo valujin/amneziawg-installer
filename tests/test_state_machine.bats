@@ -152,12 +152,6 @@ teardown() {
     [ "$output" -ge 1 ]
 }
 
-@test "installer EN contains tmp+mv atomic write" {
-    local f="${BATS_TEST_DIRNAME}/../install_amneziawg_en.sh"
-    run grep -c "mv -f \"\$tmp\" \"\$STATE_FILE\"" "$f"
-    [ "$status" -eq 0 ]
-    [ "$output" -ge 1 ]
-}
 
 @test "installer RU captures boot_id on reboot 1->2" {
     local f="${BATS_TEST_DIRNAME}/../install_amneziawg.sh"
@@ -167,12 +161,6 @@ teardown() {
     [ "$output" -ge 2 ]
 }
 
-@test "installer EN captures boot_id on reboot 1->2" {
-    local f="${BATS_TEST_DIRNAME}/../install_amneziawg_en.sh"
-    run grep -c "/proc/sys/kernel/random/boot_id" "$f"
-    [ "$status" -eq 0 ]
-    [ "$output" -ge 2 ]
-}
 
 @test "installer RU has step 2 entry guard with die" {
     local f="${BATS_TEST_DIRNAME}/../install_amneziawg.sh"
@@ -182,12 +170,6 @@ teardown() {
     [ "$output" -eq 1 ]
 }
 
-@test "installer EN has step 2 entry guard with die" {
-    local f="${BATS_TEST_DIRNAME}/../install_amneziawg_en.sh"
-    run grep -c "Reboot expected before step 2" "$f"
-    [ "$status" -eq 0 ]
-    [ "$output" -eq 1 ]
-}
 
 @test "installer RU cleans boot_id file on finish" {
     local f="${BATS_TEST_DIRNAME}/../install_amneziawg.sh"
@@ -198,9 +180,3 @@ teardown() {
     [ "$output" -ge 3 ]
 }
 
-@test "installer EN cleans boot_id file on finish" {
-    local f="${BATS_TEST_DIRNAME}/../install_amneziawg_en.sh"
-    run grep -c "\.boot_id_before_step2" "$f"
-    [ "$status" -eq 0 ]
-    [ "$output" -ge 3 ]
-}

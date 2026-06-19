@@ -65,14 +65,6 @@
     [[ "$block" == *'dpkg --configure -a'* ]]
 }
 
-@test "v5.13.0: EN install_packages falls back to dkms install for running kernel on amneziawg-dkms failure" {
-    block=$(awk '/^install_packages\(\) \{/,/^\}/' \
-        "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh")
-    [[ "$block" == *'amneziawg-dkms'* ]]
-    [[ "$block" == *'dkms install -m amneziawg'* ]]
-    [[ "$block" == *'-k "$(uname -r)" --force'* ]]
-    [[ "$block" == *'dpkg --configure -a'* ]]
-}
 
 @test "v5.13.0: RU install pre-installs gcc-13 when stale kernel headers detected" {
     grep -q 'устаревшие kernel headers' \
@@ -83,14 +75,6 @@
         "$BATS_TEST_DIRNAME/../install_amneziawg.sh"
 }
 
-@test "v5.13.0: EN install pre-installs gcc-13 when stale kernel headers detected" {
-    grep -q 'Stale kernel headers detected' \
-        "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
-    grep -q 'apt-cache madison gcc-13' \
-        "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
-    grep -q 'apt install -y gcc-13' \
-        "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
-}
 
 # ---- functional: stale-kernel-headers detection loop logic ----
 
@@ -132,69 +116,15 @@
 
 # ---------- structural: EN script mirror ----------
 
-@test "v5.13.0: EN install has PPA pre-check for Ubuntu non-LTS" {
-    grep -q 'Checking Amnezia PPA availability for Ubuntu' \
-        "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
-    grep -q 'curl -fsI --max-time 15 --retry 2 --retry-delay 5' \
-        "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
-    grep -q 'dists/${ppa_codename}/Release' \
-        "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
-}
 
-@test "v5.13.0: EN install whitelists LTS codenames (noble|jammy|focal)" {
-    grep -q 'noble|jammy|focal)' \
-        "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
-}
 
-@test "v5.13.0: EN install falls back ppa_codename to noble on failure" {
-    block=$(awk '/Checking Amnezia PPA availability for Ubuntu/,/log "Amnezia PPA is available/' \
-        "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh")
-    [[ "$block" == *'ppa_codename="noble"'* ]]
-    [[ "$block" == *'kernel-module/issues/118'* ]]
-}
 
-@test "v5.13.0: EN install has suite-mismatch detection" {
-    grep -q "awk '/\^Suites:/{print \$2; exit}'" \
-        "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
-    grep -q 'recreating' \
-        "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
-}
 
-@test "v5.13.0: EN install handles corrupt .sources (no Suites line)" {
-    grep -q 'no Suites: line found' \
-        "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
-}
 
-@test "v5.13.0: EN install also checks legacy .sources for suite mismatch" {
-    grep -q 'legacy_suite' \
-        "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
-    grep -q 'Legacy PPA' \
-        "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
-}
 
 # ---------- structural: parity counts ----------
 
-@test "v5.13.0: RU/EN pre-check block parity (curl line count matches)" {
-    ru=$(grep -c 'curl -fsI --max-time 15 --retry 2 --retry-delay 5' \
-        "$BATS_TEST_DIRNAME/../install_amneziawg.sh")
-    en=$(grep -c 'curl -fsI --max-time 15 --retry 2 --retry-delay 5' \
-        "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh")
-    [ "$ru" -eq "$en" ]
-    [ "$ru" -eq 1 ]
-}
 
-@test "v5.13.0: RU/EN noble fallback assignment count matches" {
-    # Both scripts must assign ppa_codename="noble" inside the pre-check
-    # exactly once. (Other "noble" mentions exist in Debian mapping above.)
-    ru_pre=$(awk '/case "\$ppa_codename" in/,/^            esac$/' \
-        "$BATS_TEST_DIRNAME/../install_amneziawg.sh" \
-        | grep -c 'ppa_codename="noble"')
-    en_pre=$(awk '/case "\$ppa_codename" in/,/^            esac$/' \
-        "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh" \
-        | grep -c 'ppa_codename="noble"')
-    [ "$ru_pre" -eq "$en_pre" ]
-    [ "$ru_pre" -ge 1 ]
-}
 
 # ---------- functional: ppa_codename resolution under mocked curl ----------
 

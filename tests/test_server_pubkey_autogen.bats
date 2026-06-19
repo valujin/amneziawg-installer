@@ -146,15 +146,3 @@ EOF
     [ "$(cat "$AWG_DIR/server_public.key")" = "pub_INTERFACE_KEY_ABCDEF" ]
 }
 
-@test "_ensure_server_public_key: EN mirror is identical" {
-    # Static parity check: both awg_common.sh and awg_common_en.sh define
-    # the helper with the same behavior contract. Just check the function
-    # bodies are structurally similar (awk PrivateKey extraction present).
-    local RU_FILE="${BATS_TEST_DIRNAME}/../awg_common.sh"
-    local EN_FILE="${BATS_TEST_DIRNAME}/../awg_common_en.sh"
-    grep -qE '^_ensure_server_public_key\(\)' "$RU_FILE"
-    grep -qE '^_ensure_server_public_key\(\)' "$EN_FILE"
-    # Both must call `awg pubkey`
-    awk '/^_ensure_server_public_key\(\) \{$/,/^}$/' "$RU_FILE" | grep -qE 'awg pubkey'
-    awk '/^_ensure_server_public_key\(\) \{$/,/^}$/' "$EN_FILE" | grep -qE 'awg pubkey'
-}

@@ -142,34 +142,8 @@ teardown() {
     ! grep -q "linux-headers-cloud-" "$AWG_DIR/.apt_calls"
 }
 
-# ---------- EN mirror: same behaviour from awg_common_en.sh ----------
 #
 # The shared helper exists in both awg_common.sh (RU log strings) and
-# awg_common_en.sh (EN log strings). The kernel-headers logic is identical
 # byte-for-byte; this guard catches the case where someone updates only one.
 
-@test "v5.12.1: EN mirror Debian cloud kernel adds linux-headers-cloud-amd64" {
-    # Re-source the EN helper into a fresh subshell so we don't pollute the
-    # already-loaded RU functions in this test file.
-    rm -f "$AWG_DIR/.apt_calls"
-    (
-        export AWG_ALLOW_APT_IN_ENSURE=1 OS_ID=debian MOCK_ARCH=amd64
-        # shellcheck disable=SC1091
-        source "$BATS_TEST_DIRNAME/../awg_common_en.sh"
-        _install_kernel_headers "6.1.0-22-cloud-amd64" || true
-    )
-    [ -f "$AWG_DIR/.apt_calls" ]
-    grep -q "linux-headers-cloud-amd64" "$AWG_DIR/.apt_calls"
-}
 
-@test "v5.12.1: EN mirror Debian standard kernel does NOT add cloud meta" {
-    rm -f "$AWG_DIR/.apt_calls"
-    (
-        export AWG_ALLOW_APT_IN_ENSURE=1 OS_ID=debian MOCK_ARCH=arm64
-        # shellcheck disable=SC1091
-        source "$BATS_TEST_DIRNAME/../awg_common_en.sh"
-        _install_kernel_headers "6.12.85+deb13-arm64" || true
-    )
-    [ -f "$AWG_DIR/.apt_calls" ]
-    ! grep -q "linux-headers-cloud-arm64" "$AWG_DIR/.apt_calls"
-}

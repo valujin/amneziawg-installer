@@ -81,12 +81,3 @@ EOF
     [ "$output" = "192.168.1.10" ]
 }
 
-@test "_try_local_ip: RU and EN define the helper identically" {
-    local RU_FILE="${BATS_TEST_DIRNAME}/../awg_common.sh"
-    local EN_FILE="${BATS_TEST_DIRNAME}/../awg_common_en.sh"
-    grep -qE '^_try_local_ip\(\)' "$RU_FILE"
-    grep -qE '^_try_local_ip\(\)' "$EN_FILE"
-    # Both must use `ip -4 -o addr show scope global` pattern
-    awk '/^_try_local_ip\(\) \{$/,/^}$/' "$RU_FILE" | grep -qE 'ip -4 -o addr show scope global'
-    awk '/^_try_local_ip\(\) \{$/,/^}$/' "$EN_FILE" | grep -qE 'ip -4 -o addr show scope global'
-}

@@ -103,62 +103,14 @@ setup() {
 
 # ---------- EN install script ----------
 
-@test "v5.11.4 PPA retry: EN helper succeeds on first attempt" {
-    extract_helper "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
-    apt-cache() { return 0; }
 
-    run apt_wait_for_ppa_package amneziawg-dkms 3 1
-    [ "$status" -eq 0 ]
-}
 
-@test "v5.11.4 PPA retry: EN helper retries until success" {
-    extract_helper "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
-    apt-cache() {
-        _attempts=$((_attempts + 1))
-        (( _attempts >= 2 ))
-    }
-    apt_wait_for_ppa_package amneziawg-dkms 3 1
-    rc=$?
-    [ "$rc" -eq 0 ]
-    [ "$_attempts" -eq 2 ]
-    [ "$_update_calls" -eq 1 ]
-}
-
-@test "v5.11.4 PPA retry: EN helper exhausts max attempts and returns 1" {
-    extract_helper "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
-    apt-cache() {
-        _attempts=$((_attempts + 1))
-        return 1
-    }
-    set +e
-    apt_wait_for_ppa_package amneziawg-dkms 3 1
-    rc=$?
-    set -e
-    [ "$rc" -ne 0 ]
-    [ "$_attempts" -eq 3 ]
-}
 
 # ---------- RU/EN parity ----------
 
-@test "v5.11.4 PPA retry: RU and EN helpers are structurally identical" {
-    # Normalize the only language-specific line (log_warn message) — control
-    # flow + math + return values must be identical. Anchor to start-of-line
-    # to avoid masking a future drift where someone adds a second log_warn
-    # call in this function with different RU/EN content.
-    local ru en
-    ru=$(awk '/^apt_wait_for_ppa_package\(\) \{/,/^\}/' "$BATS_TEST_DIRNAME/../install_amneziawg.sh" \
-        | sed -E 's/^([[:space:]]*)log_warn ".*"$/\1log_warn "MSG"/')
-    en=$(awk '/^apt_wait_for_ppa_package\(\) \{/,/^\}/' "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh" \
-        | sed -E 's/^([[:space:]]*)log_warn ".*"$/\1log_warn "MSG"/')
-    [ "$ru" = "$en" ]
-}
 
 @test "v5.11.4 PPA retry: friendly final error in RU references issue #68" {
     run grep -F 'issues/68' "$BATS_TEST_DIRNAME/../install_amneziawg.sh"
     [ "$status" -eq 0 ]
 }
 
-@test "v5.11.4 PPA retry: friendly final error in EN references issue #68" {
-    run grep -F 'issues/68' "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh"
-    [ "$status" -eq 0 ]
-}

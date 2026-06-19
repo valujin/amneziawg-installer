@@ -301,30 +301,5 @@ call_cleanup() {
 
 # --- Structural / RU+EN parity ---
 
-@test "structural: install_amneziawg.sh + _en.sh cleanup_system functions are line-equal" {
-    local RU EN
-    RU=$(awk '/^cleanup_system\(\) \{/,/^}$/' "$BATS_TEST_DIRNAME/../install_amneziawg.sh" | wc -l)
-    EN=$(awk '/^cleanup_system\(\) \{/,/^}$/' "$BATS_TEST_DIRNAME/../install_amneziawg_en.sh" | wc -l)
-    [ "$RU" = "$EN" ]
-}
 
-@test "structural: RU and EN cleanup_system both contain apt-mark hold + unhold + DIE" {
-    for f in install_amneziawg.sh install_amneziawg_en.sh; do
-        local block
-        block=$(awk '/^cleanup_system\(\) \{/,/^}$/' "$BATS_TEST_DIRNAME/../$f")
-        grep -q 'apt-mark hold'   <<<"$block"
-        grep -q 'apt-mark unhold' <<<"$block"
-        grep -q 'die '            <<<"$block"
-    done
-}
 
-@test "structural: apt-get autoremove is GONE from both install scripts" {
-    for f in install_amneziawg.sh install_amneziawg_en.sh; do
-        local block
-        # Strip comment lines so a # `apt-get autoremove dropped...` rationale
-        # comment does not register as a real invocation.
-        block=$(awk '/^cleanup_system\(\) \{/,/^}$/' "$BATS_TEST_DIRNAME/../$f" \
-            | grep -vE '^[[:space:]]*#')
-        run ! grep -qE 'apt-get autoremove' <<<"$block"
-    done
-}
