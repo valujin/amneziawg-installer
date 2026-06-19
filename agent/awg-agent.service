@@ -1,0 +1,24 @@
+[Unit]
+Description=AmneziaWG cascade management agent (HTTP API, Tailscale-bound)
+Documentation=https://github.com/valujin/amneziawg-installer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Root: the agent manages awg0.conf, ip/ipset/iptables, and systemd units
+# (it shells out to manage_amneziawg.sh / awg-routing). Security rests on the
+# network binding (Tailscale interface only) + bearer token, see README.
+User=root
+EnvironmentFile=/etc/awg-agent/agent.env
+ExecStart=/opt/awg-agent/venv/bin/python /opt/awg-agent/awg_agent.py
+Restart=on-failure
+RestartSec=3
+# Modest hardening that does not break root management of /root, /etc, net.
+NoNewPrivileges=true
+ProtectControlGroups=true
+ProtectKernelTunables=false
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

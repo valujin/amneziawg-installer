@@ -1,0 +1,5 @@
+# awg-agent runtime dependencies (Phase A). Kept minimal and installed into a
+# dedicated venv at /opt/awg-agent/venv by install_agent.sh.
+fastapi>=0.110,<1.0
+uvicorn[standard]>=0.27,<1.0
+pydantic>=2,<3

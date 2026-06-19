@@ -162,6 +162,47 @@ CONF
     [ "$status" -ne 0 ]
 }
 
+@test "cascade_set_config_kv: writes and idempotently replaces a key" {
+    : > "$CONFIG_FILE"
+    cascade_set_config_kv GEO_SPLIT_ENABLED 0
+    run grep -c "GEO_SPLIT_ENABLED=" "$CONFIG_FILE"
+    [ "$output" -eq 1 ]
+    grep -qx "export GEO_SPLIT_ENABLED='0'" "$CONFIG_FILE"
+
+    # replacing must not duplicate the line
+    cascade_set_config_kv GEO_SPLIT_ENABLED 1
+    run grep -c "GEO_SPLIT_ENABLED=" "$CONFIG_FILE"
+    [ "$output" -eq 1 ]
+    grep -qx "export GEO_SPLIT_ENABLED='1'" "$CONFIG_FILE"
+}
+
+@test "cascade_set_config_kv: preserves other keys and comments" {
+    printf '# header\nexport AWG_PORT=39743\n' > "$CONFIG_FILE"
+    cascade_set_config_kv DEFAULT_EXIT de
+    grep -qx "# header" "$CONFIG_FILE"
+    grep -qx "export AWG_PORT=39743" "$CONFIG_FILE"
+    grep -qx "export DEFAULT_EXIT='de'" "$CONFIG_FILE"
+}
+
+@test "cascade_set_config_kv: rejects an invalid key name" {
+    : > "$CONFIG_FILE"
+    run cascade_set_config_kv "bad key" 1
+    [ "$status" -ne 0 ]
+}
+
+@test "cascade_set_geo_split: on/off map to 1/0; junk rejected" {
+    export AWG_SKIP_APPLY=1     # cascade_reload_routing is a no-op off-box
+    : > "$CONFIG_FILE"
+    run cascade_set_geo_split off
+    [ "$status" -eq 0 ]
+    grep -qx "export GEO_SPLIT_ENABLED='0'" "$CONFIG_FILE"
+    run cascade_set_geo_split on
+    [ "$status" -eq 0 ]
+    grep -qx "export GEO_SPLIT_ENABLED='1'" "$CONFIG_FILE"
+    run cascade_set_geo_split maybe
+    [ "$status" -ne 0 ]
+}
+
 @test "cascade_clients_using_exit + remove: refuse bound, --force repoints" {
     require_flock
     make_peers_config

@@ -34,6 +34,10 @@ MANAGE_SCRIPT_PATH="$AWG_DIR/manage_amneziawg.sh"
 AWG_ROUTING_URL="https://raw.githubusercontent.com/valujin/amneziawg-installer/${AWG_BRANCH}/awg-routing.sh"
 AWG_ROUTING_UNIT_URL="https://raw.githubusercontent.com/valujin/amneziawg-installer/${AWG_BRANCH}/awg-routing.service"
 
+# Управляющий агент (API). Опционально (--with-agent), best-effort: разворачивает
+# FastAPI-демон поверх manage_amneziawg.sh, чтобы панель управляла сервером по API.
+AWG_AGENT_BASE_URL="https://raw.githubusercontent.com/valujin/amneziawg-installer/${AWG_BRANCH}/agent"
+
 # SHA256 checksums скачиваемых скриптов. Обновляются при каждом релизе.
 # Проверяются в step5_download_scripts() после curl.
 # Если AWG_BRANCH переопределён (не v$SCRIPT_VERSION), проверка пропускается.
@@ -86,10 +90,16 @@ while [[ $# -gt 0 ]]; do
         --conf=*)        CLI_CONF="${1#*=}" ;;
         --no-reboot)     NO_REBOOT=1 ;;
         --role=*)        CLI_ROLE="${1#*=}" ;;
+        --with-agent)    WITH_AGENT=1 ;;
+        --with-agent=*)  WITH_AGENT=1; AGENT_BIND="${1#*=}" ;;
         *) echo "Неизвестный аргумент: $1"; HELP=1 ;;
     esac
     shift
 done
+
+# Управляющий агент: разворачивать ли API-демон (best-effort). --with-agent[=IP]
+WITH_AGENT="${WITH_AGENT:-0}"
+AGENT_BIND="${AGENT_BIND:-}"
 
 # Роль сервера в каскаде: standalone (умолч.) | entry (вход, РФ) | exit (выход).
 # Влияет на awgsetup_cfg.init (AWG_ROLE) и на доступность каскадных команд.
@@ -282,6 +292,9 @@ show_help() {
   --endpoint=IP         Указать внешний IP сервера (для серверов за NAT)
   --role=РОЛЬ           Роль в каскаде: standalone (умолч.) | entry (вход, РФ) | exit (выход).
                         entry включает каскадную маршрутизацию (см. 'manage add-exit').
+  --with-agent[=IP]     Развернуть управляющий API-агент (FastAPI поверх manage).
+                        IP — адрес привязки (умолч. Tailscale-интерфейс). Токен — в
+                        /etc/awg-agent/agent.env. Управление панелью по API.
   -y, --yes             Автоматическое подтверждение (перезагрузки, UFW и т.д.)
   -f, --force           Принудительная переустановка поверх уже работающего AmneziaWG
                         (по умолчанию запуск на сконфигурированном сервере прерывается;
@@ -874,10 +887,10 @@ _parse_custom_conf() {
     local _S1="" _S2="" _S3="" _S4=""
     local _H1="" _H2="" _H3="" _H4=""
     local _I1="" _I2="" _I3="" _I4="" _I5=""
-    local in_iface=1 line key value seen_iface=0
+    local in_iface=1 line key value
 
     while IFS= read -r line || [[ -n "$line" ]]; do
-        if [[ "$line" =~ ^\[Interface\] ]]; then in_iface=1; seen_iface=1; continue; fi
+        if [[ "$line" =~ ^\[Interface\] ]]; then in_iface=1; continue; fi
         if [[ "$line" =~ ^\[ ]]; then in_iface=0; continue; fi
         (( in_iface )) || continue
         [[ "$line" =~ ^[[:space:]]*# ]] && continue
@@ -2865,6 +2878,31 @@ step5_download_scripts() {
     else
         rm -f "$AWG_DIR/awg-routing.sh" 2>/dev/null || true
         log_warn "awg-routing.sh недоступен на ветке ${AWG_BRANCH} — каскад будет недоступен (не критично для одиночного сервера)."
+    fi
+
+    # Управляющий агент (API) — только по запросу (--with-agent), best-effort.
+    if [[ "${WITH_AGENT:-0}" == "1" ]]; then
+        log "Развёртывание управляющего агента (--with-agent)..."
+        local _ad="$AWG_DIR/agent" _ok=1 _f
+        mkdir -p "$_ad"
+        for _f in awg_agent.py requirements.txt awg-agent.service install_agent.sh; do
+            if ! curl -fLso "$_ad/$_f" --max-time 60 --retry 2 "$AWG_AGENT_BASE_URL/$_f" 2>/dev/null; then
+                _ok=0; break
+            fi
+        done
+        if [[ "$_ok" -eq 1 ]]; then
+            chmod +x "$_ad/install_agent.sh" 2>/dev/null || true
+            local _bindarg=""
+            [[ -n "${AGENT_BIND:-}" ]] && _bindarg="--bind=${AGENT_BIND}"
+            if bash "$_ad/install_agent.sh" $_bindarg --awg-dir="$AWG_DIR"; then
+                log "Агент развёрнут (systemctl status awg-agent). Токен в /etc/awg-agent/agent.env."
+            else
+                log_warn "Не удалось развернуть агента (см. журнал). Можно повторить вручную: $_ad/install_agent.sh"
+            fi
+        else
+            rm -rf "$_ad" 2>/dev/null || true
+            log_warn "Файлы агента недоступны на ветке ${AWG_BRANCH} — агент не развёрнут (не критично)."
+        fi
     fi
 
     log "Шаг 5 завершен."

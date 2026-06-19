@@ -1340,6 +1340,7 @@ usage() {
     echo "                        Доступные: beeline_msk yota_msk tele2_msk tele2_krasnoyarsk"
     echo "                                   tattelecom megafon_regions tmobile_us"
     echo "                        Exit code: 1 только при FAIL или неизвестном операторе (WARN -> 0)"
+    echo "  --exit=CC             (для add) сразу привязать новых клиентов к exit-узлу <CC>"
     echo "  --transport=ТИП       (для add-exit) amneziawg (умолч.) или tailscale"
     echo "  --ts-ip=IP            (для add-exit --transport=tailscale) Tailscale-IP exit-узла"
     echo "  --force               (для remove-exit) перепривязать клиентов в direct и удалить узел"
@@ -1367,6 +1368,9 @@ usage() {
     echo "  remove-exit <cc>      Удалить exit-узел (--force перепривязывает клиентов в direct)"
     echo "  list-exits            Показать зарегистрированные exit-узлы"
     echo "  set-exit <клиент> <cc|direct>  Привязать клиента к exit-узлу (или direct = локальный выход)"
+    echo "  geo-split <on|off>    Вкл/выкл geo-split (on = RU-трафик остаётся локально)"
+    echo "  update-ru-list        Обновить RU-список и переприменить маршрутизацию"
+    echo "  reload-routing        Переприменить маршрутизацию каскада (alias update-ru-list)"
     echo "  help                  Показать эту справку"
     echo ""
     exit 1
@@ -1409,6 +1413,7 @@ case $COMMAND in
         fi
 
         _added=0
+        _added_names=()
         for _cname in "${ARGS[@]}"; do
             validate_client_name "$_cname" || { _cmd_rc=1; continue; }
 
@@ -1435,6 +1440,7 @@ case $COMMAND in
                         install_expiry_cron
                     fi
                 fi
+                _added_names+=("$_cname")
                 ((_added++))
             else
                 log_error "Ошибка добавления клиента '$_cname'."
@@ -1453,6 +1459,20 @@ case $COMMAND in
             else
                 log_error "Добавлено клиентов: $_added, но apply_config упал. Конфиг записан, но НЕ применён к live интерфейсу. Проверьте: systemctl status awg-quick@awg0"
                 _cmd_rc=1
+            fi
+
+            # --exit=<cc>: сразу привязать новых клиентов к exit-узлу каскада.
+            if [[ -n "${CLI_ADD_EXIT:-}" ]]; then
+                _exit_bound=0
+                for _cname in "${_added_names[@]}"; do
+                    if set_client_exit "$_cname" "$CLI_ADD_EXIT"; then
+                        _exit_bound=1
+                    else
+                        log_error "Не удалось привязать '$_cname' к exit-узлу '$CLI_ADD_EXIT'."
+                        _cmd_rc=1
+                    fi
+                done
+                [[ "$_exit_bound" -eq 1 ]] && { cascade_reload_routing || _cmd_rc=1; }
             fi
         fi
         # Hygiene: CLIENT_PSK не должен протекать в будущие операции
@@ -1667,6 +1687,18 @@ case $COMMAND in
         else
             _cmd_rc=1
         fi
+        ;;
+
+    geo-split)
+        # geo-split <on|off>
+        [[ ${#ARGS[@]} -lt 1 ]] && die "Использование: geo-split <on|off>"
+        cascade_set_geo_split "${ARGS[0]}" || _cmd_rc=1
+        ;;
+
+    update-ru-list|reload-routing)
+        # Перечитать RU-список и переприменить маршрутизацию каскада
+        # (awg-routing apply: атомарный swap ipset + fwmark + policy routing).
+        cascade_reload_routing || _cmd_rc=1
         ;;
 
     help)

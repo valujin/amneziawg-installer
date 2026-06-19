@@ -1405,6 +1405,41 @@ cascade_reload_routing() {
     return 1
 }
 
+# cascade_set_config_kv <KEY> <VALUE> — идемпотентно записать настройку каскада
+# в init-файл ($CONFIG_FILE) в формате  export KEY='value'. Существующие
+# определения ключа (export KEY=… и KEY=…) удаляются, новое дописывается в конец;
+# остальные строки и комментарии сохраняются. Запись атомарна (temp + mv).
+cascade_set_config_kv() {
+    local key="$1" value="$2" file="$CONFIG_FILE"
+    [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || { log_error "Некорректный ключ конфига: '$key'"; return 1; }
+    mkdir -p "$(dirname "$file")"
+    [[ -f "$file" ]] || : > "$file"
+    local tmp; tmp=$(awg_mktemp) || return 1
+    grep -vE "^(export[[:space:]]+)?${key}=" "$file" > "$tmp" 2>/dev/null || true
+    printf "export %s='%s'\n" "$key" "$value" >> "$tmp"
+    if ! mv "$tmp" "$file"; then rm -f "$tmp"; log_error "Ошибка записи $file"; return 1; fi
+    chmod 600 "$file" 2>/dev/null || true
+    return 0
+}
+
+# cascade_set_geo_split <on|off|1|0> — переключить geo-split (RU-трафик локально)
+# в init-файле и применить маршрутизацию.
+cascade_set_geo_split() {
+    local v="$1" enabled
+    case "$v" in
+        on|1|true|yes)  enabled=1 ;;
+        off|0|false|no) enabled=0 ;;
+        *) log_error "geo-split: ожидается on|off (получено '$v')"; return 1 ;;
+    esac
+    cascade_set_config_kv GEO_SPLIT_ENABLED "$enabled" || return 1
+    if [[ "$enabled" == "1" ]]; then
+        log "Geo-split включён: RU-трафик выходит локально (не покидает RU)."
+    else
+        log "Geo-split выключен: весь трафик клиентов идёт через exit-узлы."
+    fi
+    cascade_reload_routing
+}
+
 # systemd drop-in, который заставляет awg-routing.service стартовать ПОСЛЕ
 # туннеля exit-узла (корректный порядок при загрузке без перечисления exit'ов в юните).
 _cascade_dropin() { echo "/etc/systemd/system/awg-routing.service.d/after-${1}.conf"; }
