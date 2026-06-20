@@ -420,8 +420,19 @@ class SetExitRequest(BaseModel):
 class AddExitRequest(BaseModel):
     cc: str
     transport: str = "amneziawg"
-    config: Optional[str] = Field(None, description="exit client .conf text (amneziawg transport)")
+    config: Optional[str] = Field(None, description="exit client .conf text (amneziawg/wstunnel transport)")
     ts_ip: Optional[str] = Field(None, description="Tailscale IP of the exit (tailscale transport)")
+    # wstunnel transport: the exit's wstunnel server endpoint (host[:port], default
+    # :443) and the exit's local AmneziaWG UDP port the server forwards to.
+    wstunnel_server: Optional[str] = Field(None, description="exit wstunnel server host[:port] (wstunnel transport)")
+    wstunnel_awg_port: int = Field(9443, description="exit AmneziaWG UDP port behind the wstunnel server")
+
+
+class WstunnelServerRequest(BaseModel):
+    # Exit role: expose the local AmneziaWG server over TLS/WebSocket.
+    awg_port: int = Field(9443, description="local AmneziaWG UDP port to forward to")
+    listen_port: int = Field(443, description="public TCP port for the TLS/WS listener")
+    sni: str = Field("www.microsoft.com", description="CN/SNI for the self-signed cert")
 
 
 class GeoSplitRequest(BaseModel):
@@ -620,8 +631,8 @@ def exits_list() -> dict:
 def exits_add(req: AddExitRequest) -> dict:
     if not valid_cc(req.cc):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid country code")
-    if req.transport not in ("amneziawg", "tailscale"):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="transport must be amneziawg|tailscale")
+    if req.transport not in ("amneziawg", "tailscale", "wstunnel"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="transport must be amneziawg|wstunnel|tailscale")
 
     if req.transport == "tailscale":
         if not req.ts_ip:
@@ -632,9 +643,19 @@ def exits_add(req: AddExitRequest) -> dict:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid ts_ip")
         manage_or_raise(["add-exit", req.cc, "--transport=tailscale", f"--ts-ip={req.ts_ip}"])
     else:
+        # amneziawg + wstunnel both need the exit client .conf; wstunnel also needs
+        # the exit's wstunnel server endpoint (the carrier rides TLS to it).
         if not req.config or "[Interface]" not in req.config:
             raise HTTPException(status.HTTP_400_BAD_REQUEST,
-                                detail="amneziawg transport requires the exit client 'config' text")
+                                detail=f"{req.transport} transport requires the exit client 'config' text")
+        extra: list[str] = []
+        if req.transport == "wstunnel":
+            if not req.wstunnel_server:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                    detail="wstunnel transport requires wstunnel_server (host[:port])")
+            extra = ["--transport=wstunnel",
+                     f"--wstunnel-server={req.wstunnel_server}",
+                     f"--wstunnel-awg-port={req.wstunnel_awg_port}"]
         try:
             # NamedTemporaryFile uses O_CREAT|O_EXCL at mode 0600 — no world-readable window.
             tmp = tempfile.NamedTemporaryFile("w", suffix=".conf", delete=False, dir="/tmp")
@@ -643,13 +664,21 @@ def exits_add(req: AddExitRequest) -> dict:
         try:
             tmp.write(req.config)
             tmp.close()
-            manage_or_raise(["add-exit", req.cc, tmp.name])
+            manage_or_raise(["add-exit", req.cc, tmp.name, *extra])
         finally:
             try:
                 os.unlink(tmp.name)
             except OSError:
                 pass
     return {"added": req.cc, "exits": list_exits()}
+
+
+@app.post("/v1/wstunnel/server", dependencies=authed)
+def wstunnel_server(req: WstunnelServerRequest) -> dict:
+    """Exit role: stand up the wstunnel server so an entry can carry the WG flow
+    inside TLS/443. Idempotent (rewrites + restarts the systemd unit)."""
+    manage_or_raise(["wstunnel-server", str(req.awg_port), str(req.listen_port), req.sni])
+    return {"wstunnelServer": True, "listen": req.listen_port, "awgPort": req.awg_port}
 
 
 @app.delete("/v1/exits/{cc}", dependencies=authed)

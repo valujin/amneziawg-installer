@@ -1367,11 +1367,12 @@ _install_inter_conf() {
 # рестарт awg-routing) выполняет вызывающий manage-скрипт.
 cascade_add_exit() {
     local cc="$1" src="$2" transport="${3:-amneziawg}" ts_ip="${4:-}"
+    local wst_server="${5:-}" wst_awg_port="${6:-9443}"
     _cascade_valid_cc "$cc" || { log_error "Некорректный код exit-узла: '$cc'"; return 1; }
     [[ -f "$EXITS_DIR/$cc.conf" ]] && { log_error "Exit-узел '$cc' уже зарегистрирован"; return 1; }
     mkdir -p "$EXITS_DIR"
 
-    local idx iface endpoint dst
+    local idx iface endpoint dst wst_lport=""
     idx=$(_cascade_alloc_index) || { log_error "Нет свободных слотов для exit-узла"; return 1; }
 
     case "$transport" in
@@ -1381,12 +1382,26 @@ cascade_add_exit() {
             endpoint=$(_extract_endpoint_host "$(grep -E '^[[:space:]]*Endpoint' "$dst" | head -1)")
             [[ -n "$endpoint" ]] || { log_warn "Не удалось извлечь Endpoint из $dst — loop-guard может не сработать"; }
             ;;
+        wstunnel)
+            # WG-over-TLS carrier: same amneziawg iface, but the carrier dials a
+            # LOCAL wstunnel client (127.0.0.1:<lport>) which forwards over TLS/443
+            # to the exit's wstunnel server. Hides the WG flow from DPI that
+            # fingerprints WireGuard (the observed RU block) — the wire is TLS.
+            iface="awg-$cc"
+            [[ -n "$wst_server" ]] || { log_error "Для transport=wstunnel нужен --wstunnel-server=host[:port]"; return 1; }
+            wst_lport=$((30000 + idx))
+            dst=$(_install_inter_conf "$cc" "$src") || return 1
+            # Repoint the carrier Endpoint at the local wstunnel client.
+            sed -i -E "s#^([[:space:]]*Endpoint[[:space:]]*=).*#\\1 127.0.0.1:${wst_lport}#" "$dst"
+            # loop-guard target = the wstunnel server host (keep its TLS path on WAN).
+            endpoint="${wst_server%%:*}"
+            ;;
         tailscale)
             iface="tailscale0"
             endpoint=""
             [[ -n "$ts_ip" ]] || { log_error "Для transport=tailscale нужен Tailscale-IP exit-узла"; return 1; }
             ;;
-        *) log_error "Неизвестный transport: '$transport' (amneziawg|tailscale)"; return 1 ;;
+        *) log_error "Неизвестный transport: '$transport' (amneziawg|wstunnel|tailscale)"; return 1 ;;
     esac
 
     local tmpfile reg="$EXITS_DIR/$cc.conf"
@@ -1400,6 +1415,9 @@ EXIT_FWMARK=0x$idx
 EXIT_TABLE=$((100 + idx))
 EXIT_TRANSPORT=$transport
 EXIT_TS_IP=$ts_ip
+EXIT_WST_SERVER=$wst_server
+EXIT_WST_LPORT=$wst_lport
+EXIT_WST_AWG_PORT=$wst_awg_port
 EOF
     if ! mv "$tmpfile" "$reg"; then rm -f "$tmpfile"; log_error "Ошибка записи реестра $reg"; return 1; fi
     chmod 600 "$reg"
@@ -1424,6 +1442,9 @@ cascade_remove_exit() {
         local c
         for c in $bound; do set_client_exit "$c" direct || true; done
     fi
+    # Tear down the wstunnel client unit if this exit used the wstunnel transport.
+    local _tr; _tr=$(_cascade_read_kv "$EXITS_DIR/$cc.conf" EXIT_TRANSPORT 2>/dev/null || true)
+    [[ "$_tr" == "wstunnel" ]] && cascade_wstunnel_client_down "$cc"
     rm -f "$EXITS_DIR/$cc.conf"
     rm -f "$AWG_CONF_DIR/awg-$cc.conf"
     log "Exit-узел '$cc' удалён."
@@ -1477,6 +1498,48 @@ cascade_ensure_routing_installed() {
         systemctl enable awg-routing.service 2>/dev/null || true
     fi
     return 0
+}
+
+# --- wstunnel transport (WG-over-TLS) deploy + units ------------------------
+AWG_WSTUNNEL_SRC="${AWG_WSTUNNEL_SRC:-$AWG_DIR/awg-wstunnel.sh}"
+AWG_WSTUNNEL_BIN_PATH="${AWG_WSTUNNEL_BIN_PATH:-/usr/local/sbin/awg-wstunnel}"
+
+cascade_ensure_wstunnel_installed() {
+    [[ "${AWG_SKIP_APPLY:-0}" == "1" ]] && return 0
+    [[ -f "$AWG_WSTUNNEL_SRC" ]] || { log_warn "Не найден $AWG_WSTUNNEL_SRC — wstunnel-транспорт недоступен."; return 1; }
+    { install -m 0755 "$AWG_WSTUNNEL_SRC" "$AWG_WSTUNNEL_BIN_PATH" 2>/dev/null \
+        || { cp "$AWG_WSTUNNEL_SRC" "$AWG_WSTUNNEL_BIN_PATH" && chmod 0755 "$AWG_WSTUNNEL_BIN_PATH"; }; } \
+        || { log_error "Не удалось установить $AWG_WSTUNNEL_BIN_PATH"; return 1; }
+    "$AWG_WSTUNNEL_BIN_PATH" ensure-bin || return 1
+}
+
+# Entry side: start the wstunnel client for exit <cc> from its registry.
+cascade_wstunnel_client_up() {
+    local cc="$1" f="$EXITS_DIR/$cc.conf"
+    [[ "${AWG_SKIP_APPLY:-0}" == "1" ]] && return 0
+    [[ -f "$f" ]] || { log_error "Реестр exit '$cc' не найден"; return 1; }
+    local server lport awgp host port
+    server=$(_cascade_read_kv "$f" EXIT_WST_SERVER)
+    lport=$(_cascade_read_kv "$f" EXIT_WST_LPORT)
+    awgp=$(_cascade_read_kv "$f" EXIT_WST_AWG_PORT)
+    [[ -n "$server" && -n "$lport" ]] || { log_error "Нет параметров wstunnel для '$cc'"; return 1; }
+    host="${server%%:*}"; port="443"; [[ "$server" == *:* ]] && port="${server##*:}"
+    cascade_ensure_wstunnel_installed || return 1
+    "$AWG_WSTUNNEL_BIN_PATH" client "$cc" "$host" "$port" "$lport" "${awgp:-9443}"
+}
+
+cascade_wstunnel_client_down() {
+    local cc="$1"
+    [[ "${AWG_SKIP_APPLY:-0}" == "1" ]] && return 0
+    [[ -x "$AWG_WSTUNNEL_BIN_PATH" ]] && "$AWG_WSTUNNEL_BIN_PATH" client-down "$cc" 2>/dev/null || true
+}
+
+# Exit side: set up the wstunnel server (TLS/<listen> -> local awg <port>).
+cascade_wstunnel_server_up() {
+    local awg_port="${1:-9443}" listen="${2:-443}" sni="${3:-www.microsoft.com}"
+    [[ "${AWG_SKIP_APPLY:-0}" == "1" ]] && return 0
+    cascade_ensure_wstunnel_installed || return 1
+    "$AWG_WSTUNNEL_BIN_PATH" server "$awg_port" "$listen" "$sni"
 }
 
 # Применить/перезапустить маршрутизацию каскада (ipset + fwmark + policy routing).

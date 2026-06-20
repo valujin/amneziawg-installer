@@ -72,6 +72,8 @@ while [[ $# -gt 0 ]]; do
         --exit=*)          CLI_ADD_EXIT="${1#*=}"; shift ;;
         --transport=*)     CLI_TRANSPORT="${1#*=}"; shift ;;
         --ts-ip=*)         CLI_TS_IP="${1#*=}"; shift ;;
+        --wstunnel-server=*)   CLI_WST_SERVER="${1#*=}"; shift ;;
+        --wstunnel-awg-port=*) CLI_WST_AWG_PORT="${1#*=}"; shift ;;
         --force)           CLI_FORCE=1; shift ;;
         --*)               echo "Неизвестная опция: $1" >&2; COMMAND="help"; break ;;
         *)
@@ -1654,12 +1656,22 @@ case $COMMAND in
         # add-exit <cc> <конфиг-клиента-от-exit-сервера> [--transport=tailscale --ts-ip=IP]
         [[ ${#ARGS[@]} -lt 1 ]] && die "Использование: add-exit <cc> <конфиг-клиента-от-exit> [--transport=amneziawg|tailscale] [--ts-ip=IP]"
         _cc="${ARGS[0]}"; _src="${ARGS[1]:-}"
-        if cascade_add_exit "$_cc" "$_src" "${CLI_TRANSPORT:-amneziawg}" "${CLI_TS_IP:-}"; then
-            [[ "${CLI_TRANSPORT:-amneziawg}" == "amneziawg" ]] && { cascade_iface_up "$_cc" || _cmd_rc=1; }
+        if cascade_add_exit "$_cc" "$_src" "${CLI_TRANSPORT:-amneziawg}" "${CLI_TS_IP:-}" "${CLI_WST_SERVER:-}" "${CLI_WST_AWG_PORT:-9443}"; then
+            case "${CLI_TRANSPORT:-amneziawg}" in
+                amneziawg) cascade_iface_up "$_cc" || _cmd_rc=1 ;;
+                wstunnel)  { cascade_wstunnel_client_up "$_cc" && cascade_iface_up "$_cc"; } || _cmd_rc=1 ;;
+            esac
             cascade_reload_routing || _cmd_rc=1
         else
             _cmd_rc=1
         fi
+        ;;
+
+    wstunnel-server)
+        # Exit role: expose the local AmneziaWG server over TLS/WebSocket so an
+        # entry can carry the WG flow inside HTTPS. wstunnel-server [<awg_port>] [<listen=443>] [<sni>]
+        _wp="${ARGS[0]:-${AWG_PORT:-9443}}"; _wl="${ARGS[1]:-443}"; _wsni="${ARGS[2]:-www.microsoft.com}"
+        cascade_wstunnel_server_up "$_wp" "$_wl" "$_wsni" || _cmd_rc=1
         ;;
 
     remove-exit)

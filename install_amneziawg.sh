@@ -33,6 +33,10 @@ MANAGE_SCRIPT_PATH="$AWG_DIR/manage_amneziawg.sh"
 # (см. step5); нужны только для роли entry, разворачиваются при 'manage add-exit'.
 AWG_ROUTING_URL="https://raw.githubusercontent.com/valujin/amneziawg-installer/${AWG_BRANCH}/awg-routing.sh"
 AWG_ROUTING_UNIT_URL="https://raw.githubusercontent.com/valujin/amneziawg-installer/${AWG_BRANCH}/awg-routing.service"
+# wstunnel transport (WG-over-TLS): hides the WireGuard flow inside HTTPS when a
+# censor fingerprints WG. Best-effort fetch (см. step5); used by 'manage add-exit
+# --transport=wstunnel' and 'manage wstunnel-server'.
+AWG_WSTUNNEL_URL="https://raw.githubusercontent.com/valujin/amneziawg-installer/${AWG_BRANCH}/awg-wstunnel.sh"
 
 # Управляющий агент (API). Опционально (--with-agent), best-effort: разворачивает
 # FastAPI-демон поверх manage_amneziawg.sh, чтобы панель управляла сервером по API.
@@ -3015,6 +3019,15 @@ step5_download_scripts() {
     else
         rm -f "$AWG_DIR/awg-routing.sh" 2>/dev/null || true
         log_warn "awg-routing.sh недоступен на ветке ${AWG_BRANCH} — каскад будет недоступен (не критично для одиночного сервера)."
+    fi
+
+    log "Скачивание awg-wstunnel.sh (WG-over-TLS транспорт, best-effort)..."
+    if curl -fLso "$AWG_DIR/awg-wstunnel.sh" --max-time 60 --retry 2 "$AWG_WSTUNNEL_URL" 2>/dev/null; then
+        chmod 700 "$AWG_DIR/awg-wstunnel.sh" 2>/dev/null || true
+        log "wstunnel-транспорт загружен (add-exit --transport=wstunnel)."
+    else
+        rm -f "$AWG_DIR/awg-wstunnel.sh" 2>/dev/null || true
+        log_warn "awg-wstunnel.sh недоступен на ветке ${AWG_BRANCH} — wstunnel-транспорт недоступен."
     fi
 
     # Управляющий агент (API) — только по запросу (--with-agent), best-effort.
