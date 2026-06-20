@@ -25,17 +25,34 @@ from typing import Optional
 
 # Curated REALITY dest/serverName candidates: real TLS1.3 + HTTP/2 origins that
 # are NOT CDN-fronted (a CDN-fronted dest turns the box into a port-forwarder and
-# is more fingerprintable). The agent re-validates the chosen one at provision
-# time via `awg-xray.sh test-dest`.
+# is more fingerprintable) and are NOT globally-watched "bait" (google/microsoft,
+# which RU DPI specifically flags as proxy dests). The agent re-validates the
+# chosen one at provision time via `awg-xray.sh test-dest`.
+#
+# For a RU client->entry leg, mimic a *Russian* resource: a TLS connection to a
+# popular .ru site is the most innocuous possible traffic on a Russian network and
+# is never SNI-throttled. The list below is ordered Russian-first and was verified
+# (TLS1.3+h2 reachable from the RU server, 2026-06-21). Telecom sites (mts/beeline)
+# are especially plausible on their own carrier networks.
+# RU clients MUST use a Russian whitelisted SNI: RU mobile/home DPI runs an SNI
+# whitelist + a ~16-20 KB cutoff — a non-whitelisted/foreign SNI (e.g.
+# www.microsoft.com) completes the handshake then gets the flow SEVERED after
+# ~16-20 KB, so "it connects but nothing loads". A whitelisted .ru SNI disables
+# that filter for the flow. The list below is whitelisted AND verified working as
+# a REALITY dest end-to-end from a clean (non-RU) vantage on 2026-06-21: clean
+# HTTP 200 on the apex (no off-domain redirect), TLS1.3+h2.
+#   Avoid: vk.com (302->m.vk.com), avito.ru apex (301->www), yandex.ru / ya.ru /
+#   kinopoisk.ru (Yandex SSO/captcha redirect), mail.ru/dzen.ru/gosuslugi.ru
+#   (CDN-fronted, no clean TLS1.3+h2). These break REALITY despite being whitelisted.
 DEFAULT_DESTS = [
-    "dl.google.com",
-    "www.microsoft.com",
-    "swdlp.apple.com",
-    "www.samsung.com",
-    "www.cisco.com",
+    # Russian-resource mimicry — whitelisted + verified working REALITY dests:
+    "ok.ru", "www.avito.ru", "sberbank.ru", "www.tbank.ru", "www.kaspersky.ru",
+    "www.rbc.ru", "cbr.ru", "hh.ru",
+    # Foreign fallbacks — ONLY for entries/exits ABROAD (a RU client gets cut):
+    "dl.google.com", "swdlp.apple.com",
 ]
 
-DEFAULT_DEST = DEFAULT_DESTS[0]
+DEFAULT_DEST = "ok.ru"
 DEFAULT_FLOW = "xtls-rprx-vision"
 DEFAULT_FP = "chrome"
 
