@@ -57,6 +57,8 @@ CLI_CONF=""
 # получает IPv6-адрес и весь его IPv6 заворачивается в VPN). --no-ipv6-tunnel
 # отключает (поведение как до v5.15: только IPv4 у клиента).
 CLI_NO_IPV6_TUNNEL=0
+# Явный SSH-порт для UFW (--ssh-port=N). Пусто = автоопределение (anti-lockout).
+CLI_SSH_PORT=""
 
 # --- Автоочистка временных файлов ---
 _install_temp_files=()
@@ -82,6 +84,7 @@ while [[ $# -gt 0 ]]; do
         --disallow-ipv6) CLI_DISABLE_IPV6=1 ;;
         --no-ipv6-tunnel)   CLI_NO_IPV6_TUNNEL=1 ;;
         --allow-ipv6-tunnel) CLI_NO_IPV6_TUNNEL=0 ;;  # явное вкл (это и так дефолт)
+        --ssh-port=*)    CLI_SSH_PORT="${1#*=}" ;;
         --route-all)     CLI_ROUTING_MODE=1 ;;
         --route-amnezia) CLI_ROUTING_MODE=2 ;;
         --route-custom=*) CLI_ROUTING_MODE=3; CLI_CUSTOM_ROUTES="${1#*=}" ;;
@@ -292,6 +295,9 @@ show_help() {
   --subnet=ПОДСЕТЬ      Установить подсеть туннеля (x.x.x.x/yy) неинтерактивно
   --allow-ipv6          Оставить IPv6 включенным неинтерактивно
   --disallow-ipv6       Принудительно отключить IPv6 неинтерактивно
+  --no-ipv6-tunnel      Отключить dual-stack IPv6 в туннеле (по умолчанию ВКЛ:
+                        клиент получает IPv6 + весь IPv6 заворачивается в VPN)
+  --ssh-port=N          Явный SSH-порт для UFW (по умолчанию автоопределение)
   --route-all           Использовать режим 'Весь трафик' неинтерактивно
   --route-amnezia       Использовать режим 'Amnezia' неинтерактивно
   --route-custom=СЕТИ   Использовать режим 'Пользовательский' неинтерактивно
@@ -790,7 +796,12 @@ configure_routing_mode() {
            fi
            log "Выбран режим: Пользовательский ($ALLOWED_IPS)" ;;
         *) ALLOWED_IPS_MODE=2
-           ALLOWED_IPS="0.0.0.0/5, 8.0.0.0/7, 11.0.0.0/8, 12.0.0.0/6, 16.0.0.0/4, 32.0.0.0/3, 64.0.0.0/2, 128.0.0.0/3, 160.0.0.0/5, 168.0.0.0/6, 172.0.0.0/12, 172.32.0.0/11, 172.64.0.0/10, 172.128.0.0/9, 173.0.0.0/8, 174.0.0.0/7, 176.0.0.0/4, 192.0.0.0/9, 192.128.0.0/11, 192.160.0.0/13, 192.169.0.0/16, 192.170.0.0/15, 192.172.0.0/14, 192.176.0.0/12, 192.192.0.0/10, 193.0.0.0/8, 194.0.0.0/7, 196.0.0.0/6, 200.0.0.0/5, 208.0.0.0/4, 8.8.8.8/32, 1.1.1.1/32, ::/0"
+           # iOS-фикс (upstream 01fb44c): начальный 0.0.0.0/5 покрывает
+           # зарезервированный 0.0.0.0/8, на котором ядро iOS отваливается и не
+           # доустанавливает остальные маршруты (туннель «висит» ~10с после
+           # коннекта). Заменяем 0.0.0.0/5 на 1/8,2/7,4/6 — то же покрытие минус
+           # нероутируемый ноль-блок; split сохраняется.
+           ALLOWED_IPS="1.0.0.0/8, 2.0.0.0/7, 4.0.0.0/6, 8.0.0.0/7, 11.0.0.0/8, 12.0.0.0/6, 16.0.0.0/4, 32.0.0.0/3, 64.0.0.0/2, 128.0.0.0/3, 160.0.0.0/5, 168.0.0.0/6, 172.0.0.0/12, 172.32.0.0/11, 172.64.0.0/10, 172.128.0.0/9, 173.0.0.0/8, 174.0.0.0/7, 176.0.0.0/4, 192.0.0.0/9, 192.128.0.0/11, 192.160.0.0/13, 192.169.0.0/16, 192.170.0.0/15, 192.172.0.0/14, 192.176.0.0/12, 192.192.0.0/10, 193.0.0.0/8, 194.0.0.0/7, 196.0.0.0/6, 200.0.0.0/5, 208.0.0.0/4, 8.8.8.8/32, 1.1.1.1/32, ::/0"
            log "Выбран режим: Список Amnezia+DNS." ;;
     esac
     if [ -z "$ALLOWED_IPS" ]; then die "Не удалось определить AllowedIPs."; fi
@@ -1468,9 +1479,46 @@ EOF
 # Фаервол и безопасность
 # ==============================================================================
 
+# detect_ssh_ports — печатает (по одному в строке) все порты, на которых может
+# слушать SSH: явный --ssh-port, иначе объединение sshd -T / слушающих сокетов /
+# sshd_config (+drop-ins), иначе 22. Защита от lockout при нестандартном порту
+# (upstream e016bb6): UFW default deny + открытие только 22 заблокировало бы SSH.
+detect_ssh_ports() {
+    if [[ -n "${CLI_SSH_PORT:-}" ]]; then
+        [[ "$CLI_SSH_PORT" =~ ^[0-9]+$ ]] && echo "$CLI_SSH_PORT"
+        return 0
+    fi
+    local ports=()
+    if command -v sshd >/dev/null 2>&1; then
+        while read -r p; do [[ "$p" =~ ^[0-9]+$ ]] && ports+=("$p"); done \
+            < <(sshd -T 2>/dev/null | awk 'tolower($1)=="port"{print $2}')
+    fi
+    if command -v ss >/dev/null 2>&1; then
+        while read -r p; do [[ "$p" =~ ^[0-9]+$ ]] && ports+=("$p"); done \
+            < <(ss -tlnpH 2>/dev/null | awk '/sshd|"ssh"/{n=split($4,a,":"); print a[n]}')
+    fi
+    while read -r p; do [[ "$p" =~ ^[0-9]+$ ]] && ports+=("$p"); done \
+        < <(grep -rhiE '^[[:space:]]*Port[[:space:]]+[0-9]+' \
+              /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null | awk '{print $2}')
+    [[ ${#ports[@]} -eq 0 ]] && ports=(22)
+    printf '%s\n' "${ports[@]}" | awk '$0 ~ /^[0-9]+$/ && $0 >= 1 && $0 <= 65535' | sort -un
+}
+
+# ufw_limit_ssh — ufw limit для КАЖДОГО обнаруженного SSH-порта (anti-lockout).
+ufw_limit_ssh() {
+    local p
+    while read -r p; do
+        [[ -n "$p" ]] || continue
+        ufw limit "${p}/tcp" comment "SSH Rate Limit" \
+            || { log_warn "UFW: ошибка limit SSH порт $p"; return 1; }
+    done < <(detect_ssh_ports)
+    return 0
+}
+
 setup_improved_firewall() {
     log "Настройка UFW..."
     if ! command -v ufw &>/dev/null; then install_packages ufw; fi
+    log "SSH-порты для UFW: $(detect_ssh_ports | tr '\n' ' ')"
 
     # Определяем основной сетевой интерфейс для правила маршрутизации
     local main_nic
@@ -1484,7 +1532,7 @@ setup_improved_firewall() {
         log "UFW неактивен. Настройка..."
         ufw default deny incoming  || { log_warn "UFW: ошибка default deny incoming"; ufw_errors=1; }
         ufw default allow outgoing || { log_warn "UFW: ошибка default allow outgoing"; ufw_errors=1; }
-        ufw limit 22/tcp comment "SSH Rate Limit" || { log_warn "UFW: ошибка limit SSH"; ufw_errors=1; }
+        ufw_limit_ssh || ufw_errors=1
         ufw allow "${AWG_PORT}/udp" comment "AmneziaWG VPN" || { log_warn "UFW: ошибка allow VPN port"; ufw_errors=1; }
         if [[ -n "$main_nic" ]]; then
             ufw route allow in on awg0 out on "$main_nic" comment "AmneziaWG Routing" \
@@ -1520,7 +1568,7 @@ setup_improved_firewall() {
             log_warn "Не удалось создать UFW marker — uninstall не сможет отключить UFW автоматически."
     else
         log "UFW активен. Обновление правил..."
-        ufw limit 22/tcp comment "SSH Rate Limit" || { log_warn "UFW: ошибка limit SSH"; ufw_errors=1; }
+        ufw_limit_ssh || ufw_errors=1
         ufw allow "${AWG_PORT}/udp" comment "AmneziaWG VPN" || { log_warn "UFW: ошибка allow VPN port"; ufw_errors=1; }
         if [[ -n "$main_nic" ]]; then
             ufw route allow in on awg0 out on "$main_nic" comment "AmneziaWG Routing" \
@@ -1575,10 +1623,10 @@ setup_fail2ban() {
     mkdir -p /etc/fail2ban/jail.d 2>/dev/null
 
     # Backend: systemd для Debian (нет rsyslog), auto для Ubuntu
-    local f2b_backend="auto"
-    if [[ "${OS_ID:-}" == "debian" ]]; then
-        f2b_backend="systemd"
-    fi
+    # fail2ban-фикс (upstream 8eb24d1): на минимальной Ubuntu 24.04 нет rsyslog →
+    # нет /var/log/auth.log, и backend=auto у sshd-jail падает. systemd-backend
+    # читает журнал напрямую и работает и на Debian, и на Ubuntu.
+    local f2b_backend="systemd"
 
     cat > /etc/fail2ban/jail.d/amneziawg.conf << JAILEOF || { log_warn "Ошибка записи jail.d/amneziawg.conf"; return 1; }
 # AmneziaWG — SSH protection (managed by amneziawg-installer)
@@ -1591,10 +1639,14 @@ bantime  = 1h
 banaction = ufw
 JAILEOF
 
-    if systemctl restart fail2ban; then
+    # restart возвращает 0, даже если сервис тут же умирает (плохой backend и т.п.) —
+    # поэтому проверяем is-active после паузы (upstream 8eb24d1).
+    systemctl restart fail2ban 2>/dev/null || true
+    sleep 1
+    if systemctl is-active --quiet fail2ban; then
         log "Fail2Ban настроен и перезапущен."
     else
-        log_warn "Ошибка перезапуска fail2ban"
+        log_warn "Fail2Ban не запустился — см. journalctl -u fail2ban"
     fi
     return 0
 }

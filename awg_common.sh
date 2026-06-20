@@ -1728,10 +1728,17 @@ generate_vpn_uri() {
 
     local vpn_uri perl_err
     perl_err=$(awg_mktemp) || perl_err="/tmp/awg_perl_err.$$"
+    # Секреты (приватный ключ клиента, PSK, публичный ключ сервера) передаём в
+    # perl через окружение, а не argv (upstream 36d952c): argv виден в
+    # /proc/<pid>/cmdline любому процессу того же uid на время запуска perl.
     # shellcheck disable=SC2016
-    vpn_uri=$(perl -MCompress::Zlib -MMIME::Base64 -e '
+    vpn_uri=$(AWG_URI_CPK="$client_privkey" AWG_URI_PSK="$client_psk" AWG_URI_SPK="$server_pubkey" \
+        perl -MCompress::Zlib -MMIME::Base64 -e '
         my ($conf_path, $h1,$h2,$h3,$h4, $jc,$jmin,$jmax,
-            $s1,$s2,$s3,$s4, $i1, $port, $ep, $cip, $cipv6, $cpk, $spk, $aips, $psk) = @ARGV;
+            $s1,$s2,$s3,$s4, $i1, $port, $ep, $cip, $cipv6, $aips) = @ARGV;
+        my $cpk = defined $ENV{AWG_URI_CPK} ? $ENV{AWG_URI_CPK} : "";
+        my $spk = defined $ENV{AWG_URI_SPK} ? $ENV{AWG_URI_SPK} : "";
+        my $psk = defined $ENV{AWG_URI_PSK} ? $ENV{AWG_URI_PSK} : "";
 
         open my $fh, "<", $conf_path or die;
         local $/; my $raw = <$fh>; close $fh;
@@ -1791,7 +1798,7 @@ generate_vpn_uri() {
         "$AWG_Jc" "$AWG_Jmin" "$AWG_Jmax" \
         "$AWG_S1" "$AWG_S2" "$AWG_S3" "$AWG_S4" \
         "$AWG_I1" "$AWG_PORT" "$endpoint" \
-        "$client_ip" "$client_ipv6" "$client_privkey" "$server_pubkey" "$allowed_ips" "$client_psk" 2>"$perl_err"
+        "$client_ip" "$client_ipv6" "$allowed_ips" 2>"$perl_err"
     )
 
     if [[ -z "$vpn_uri" ]]; then

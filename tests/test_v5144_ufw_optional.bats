@@ -23,8 +23,11 @@ RU_SCRIPT="$BATS_TEST_DIRNAME/../install_amneziawg.sh"
 # Exported so a child `bash -c` (used to feed stdin over a pipe) inherits it.
 _load_firewall_fn() {
     local script="$1"
-    eval "$(awk '/^setup_improved_firewall\(\) \{/,/^\}/' "$script" | sed 's#< /dev/tty##')"
-    export -f setup_improved_firewall
+    # Also pull in ufw_limit_ssh (setup_improved_firewall now calls it). The SSH
+    # port resolver detect_ssh_ports is stubbed in setup() to a fixed 22 so the
+    # firewall flow is tested without touching the host's real sshd/ss/config.
+    eval "$(awk '/^(setup_improved_firewall|ufw_limit_ssh)\(\) \{/,/^\}/' "$script" | sed 's#< /dev/tty##')"
+    export -f setup_improved_firewall ufw_limit_ssh
 }
 
 setup() {
@@ -47,12 +50,14 @@ setup() {
     command() { return 0; }          # `command -v ufw` -> found
     install_packages() { return 0; }
     touch() { return 0; }
+    # Deterministic SSH-port resolver — avoids touching the host's sshd/ss/config.
+    detect_ssh_ports() { echo 22; }
     log()       { :; }
     log_warn()  { :; }
     log_error() { :; }
     die() { echo "DIE: $*"; return 1; }
 
-    export -f ufw ip command install_packages touch log log_warn log_error die
+    export -f ufw ip command install_packages touch detect_ssh_ports log log_warn log_error die
 
     AWG_PORT=39743
     AWG_DIR="$BATS_TEST_TMPDIR"
