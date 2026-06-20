@@ -2890,6 +2890,24 @@ step5_download_scripts() {
                 _ok=0; break
             fi
         done
+        # Config generator (awg_genlib, Architect port) — best-effort. Without it
+        # the agent still manages clients/exits/routing but /v1/generate &c. return
+        # 501. GitHub raw can't list a dir, so fetch a fixed file manifest.
+        if [[ "$_ok" -eq 1 ]]; then
+            mkdir -p "$_ad/awg_genlib/data"
+            local _gl_ok=1 _gf
+            for _gf in __init__.py generator.py validate.py mergekeys.py presets.py \
+                       data/hostpools.json data/hostpools_tiered.json; do
+                if ! curl -fLso "$_ad/awg_genlib/$_gf" --max-time 60 --retry 2 \
+                        "$AWG_AGENT_BASE_URL/awg_genlib/$_gf" 2>/dev/null; then
+                    _gl_ok=0; break
+                fi
+            done
+            if [[ "$_gl_ok" -eq 0 ]]; then
+                rm -rf "$_ad/awg_genlib" 2>/dev/null || true
+                log_warn "awg_genlib недоступен на ветке ${AWG_BRANCH} — агент без генератора конфигов (не критично)."
+            fi
+        fi
         if [[ "$_ok" -eq 1 ]]; then
             chmod +x "$_ad/install_agent.sh" 2>/dev/null || true
             local _bindarg=""
