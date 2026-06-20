@@ -19,6 +19,7 @@ from .xray import (
     build_entry_config as xray_build_entry_config,
     build_exit_config as xray_build_exit_config,
     vless_link as xray_vless_link,
+    client_config as xray_client_config,
     DEFAULT_DESTS as XRAY_DEFAULT_DESTS,
     DEFAULT_DEST as XRAY_DEFAULT_DEST,
 )
@@ -38,5 +39,5 @@ __all__ = [
     "generate_preset", "list_presets", "describe_presets", "PRESETS",
     # xray / VLESS+REALITY
     "xray_build_entry_config", "xray_build_exit_config", "xray_vless_link",
-    "XRAY_DEFAULT_DESTS", "XRAY_DEFAULT_DEST",
+    "xray_client_config", "XRAY_DEFAULT_DESTS", "XRAY_DEFAULT_DEST",
 ]

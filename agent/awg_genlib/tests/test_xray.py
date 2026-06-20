@@ -92,3 +92,18 @@ def test_vision_remains_default():
     cfg = xray.build_exit_config(8443, "dl.google.com", None, "P", [], [{"id": "u", "email": "e"}])
     assert cfg["inbounds"][0]["streamSettings"]["network"] == "tcp"
     assert cfg["inbounds"][0]["settings"]["clients"][0]["flow"] == "xtls-rprx-vision"
+
+
+def test_client_config_has_fulltunnel_dns_fix():
+    # The turnkey client config must bake in FakeDNS + sniffing + IPv4-only,
+    # else a TUN client gets flaky DNS over the cascade ("connects, nothing loads").
+    cfg = xray.client_config("1.2.3.4", 443, "u", "PBK", "ok.ru", short_id="aa", transport="xhttp")
+    assert cfg["fakedns"][0]["ipPool"] == "198.18.0.0/15"
+    assert cfg["dns"]["queryStrategy"] == "UseIPv4"
+    assert "fakedns" in cfg["inbounds"][0]["sniffing"]["destOverride"]
+    assert cfg["outbounds"][0]["streamSettings"]["network"] == "xhttp"
+    assert "flow" not in cfg["outbounds"][0]["settings"]["vnext"][0]["users"][0]
+    # DNS routed to the dns outbound; everything else to proxy
+    rules = cfg["routing"]["rules"]
+    assert rules[0]["port"] == 53 and rules[0]["outboundTag"] == "dns-out"
+    assert rules[-1]["outboundTag"] == "proxy"

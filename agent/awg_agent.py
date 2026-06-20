@@ -58,6 +58,7 @@ try:
         xray_build_entry_config as genlib_xray_entry,
         xray_build_exit_config as genlib_xray_exit,
         xray_vless_link as genlib_vless_link,
+        xray_client_config as genlib_xray_client_config,
         XRAY_DEFAULT_DESTS as GENLIB_XRAY_DESTS,
         XRAY_DEFAULT_DEST as GENLIB_XRAY_DEST,
     )
@@ -964,6 +965,27 @@ def reality_client_link(name: str) -> str:
     if not link:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="server public_host not set; rebuild the link from the panel")
     return link
+
+
+@app.get("/v1/reality/clients/{name}/clientconfig", dependencies=authed)
+def reality_client_config(name: str) -> dict:
+    """Full turnkey Xray CLIENT config (FakeDNS + sniffing + IPv4-only) for
+    v2rayNG/amnezia 'custom config' import — fixes full-tunnel DNS so pages load."""
+    if not valid_client_name(name):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid client name")
+    if not GENLIB_OK:
+        raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, detail="awg_genlib not deployed")
+    srv = _xray_read_json(_xray_server_path(), None)
+    clients = _xray_read_json(_xray_clients_path(), [])
+    c = next((x for x in clients if x["name"] == name), None)
+    if not srv or not c:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="client not found")
+    host = (srv.get("public_host") or "").strip()
+    if not host:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="server public_host not set")
+    return genlib_xray_client_config(
+        host, int(srv.get("listen", 443)), c["uuid"], srv["public_key"], srv["sni"],
+        short_id=c.get("shortid", ""), transport=srv.get("transport", "vision"))
 
 
 @app.delete("/v1/exits/{cc}", dependencies=authed)

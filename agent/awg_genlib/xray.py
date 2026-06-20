@@ -202,6 +202,55 @@ def build_entry_config(listen_port: int, dest: str, sni: str, private_key: str,
     }
 
 
+def client_config(host: str, port: int, uuid: str, public_key: str, sni: str,
+                  short_id: str = "", fingerprint: str = DEFAULT_FP,
+                  transport: str = "vision", path: str = "/", socks_port: int = 10808) -> dict:
+    """A full, robust Xray CLIENT config (v2rayNG/amnezia 'custom config').
+
+    Bakes in the full-tunnel reliability fix: FakeDNS + sniffing (resolve by the
+    sniffed TLS SNI at the exit, never lossy UDP DNS over the cascade) + IPv4-only
+    (no IPv6 blackhole). Without this a TUN client gets flaky DNS → "connects but
+    nothing loads". All routing goes to `proxy` (the entry), which applies the
+    server-side geo-split itself.
+    """
+    xhttp = (transport == "xhttp")
+    stream = {
+        "network": "xhttp" if xhttp else "tcp",
+        "security": "reality",
+        "realitySettings": {
+            "serverName": sni, "fingerprint": fingerprint or DEFAULT_FP,
+            "publicKey": public_key, "shortId": short_id, "spiderX": "/",
+        },
+    }
+    if xhttp:
+        stream["xhttpSettings"] = {"path": path, "mode": "auto"}
+    user = {"id": uuid, "encryption": "none"}
+    if not xhttp:
+        user["flow"] = DEFAULT_FLOW
+    return {
+        "log": {"loglevel": "warning"},
+        "fakedns": [{"ipPool": "198.18.0.0/15", "poolSize": 65535}],
+        "dns": {"servers": ["fakedns", "1.1.1.1"], "queryStrategy": "UseIPv4"},
+        "inbounds": [{
+            "tag": "socks-in", "port": int(socks_port), "listen": "127.0.0.1",
+            "protocol": "socks", "settings": {"udp": True, "auth": "noauth"},
+            "sniffing": {"enabled": True, "destOverride": ["fakedns", "http", "tls", "quic"],
+                         "routeOnly": False},
+        }],
+        "outbounds": [
+            {"protocol": "vless", "tag": "proxy",
+             "settings": {"vnext": [{"address": host, "port": int(port), "users": [user]}]},
+             "streamSettings": stream},
+            {"protocol": "dns", "tag": "dns-out"},
+            {"protocol": "freedom", "tag": "direct", "settings": {"domainStrategy": "UseIPv4"}},
+        ],
+        "routing": {"domainStrategy": "AsIs", "rules": [
+            {"type": "field", "port": 53, "outboundTag": "dns-out"},
+            {"type": "field", "network": "tcp,udp", "outboundTag": "proxy"},
+        ]},
+    }
+
+
 def vless_link(host: str, port: int, uuid: str, public_key: str, sni: str,
                short_id: str = "", fingerprint: str = DEFAULT_FP,
                label: str = "", transport: str = "vision", path: str = "/") -> str:
