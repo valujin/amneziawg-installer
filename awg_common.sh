@@ -1515,7 +1515,8 @@ cascade_ensure_wstunnel_installed() {
 
 # Entry side: start the wstunnel client for exit <cc> from its registry.
 cascade_wstunnel_client_up() {
-    local cc="$1" f="$EXITS_DIR/$cc.conf"
+    local cc="$1"
+    local f="$EXITS_DIR/$cc.conf"
     [[ "${AWG_SKIP_APPLY:-0}" == "1" ]] && return 0
     [[ -f "$f" ]] || { log_error "Реестр exit '$cc' не найден"; return 1; }
     local server lport awgp host port
