@@ -121,3 +121,111 @@ def merge_obfuscation(vpn_config: dict, params: dict) -> dict:
 def merge_into_link(vpn_link: str, params: dict) -> str:
     """Convenience: decode a vpn:// link, patch obfuscation, re-encode."""
     return vpn_encode(merge_obfuscation(vpn_decode(vpn_link), params))
+
+
+# --------------------------------------------------------------------------
+# Building an obfuscation patch from a generated config (gen_cfg output)
+# --------------------------------------------------------------------------
+def get_client_fields(awg_ver: str) -> list[str]:
+    """Client-obfuscation field names by AWG version.
+
+    "1" / "1.0" → Jc/Jmin/Jmax only. Anything else (1.5/2.0) → + I1-I5.
+    """
+    if str(awg_ver) in ("1", "1.0"):
+        return list(_BASE_FIELDS)
+    return list(_BASE_FIELDS) + list(_CPS_FIELDS)
+
+
+def build_obfuscation_patch(gen: dict, version: str = "2.0") -> dict:
+    """Build a {Jc,Jmin,Jmax(,I1-I5)} string-valued patch from a generated set.
+
+    Accepts either a gen_cfg() result (lowercase jc/jmin/.../i1) or an already
+    uppercase param dict (Jc/.../I1). I1-I5 are included only when ``version``
+    supports CPS (i.e. not "1.0").
+    """
+    def pick(*keys):
+        for k in keys:
+            if k in gen and gen[k] not in (None, ""):
+                return gen[k]
+        return None
+
+    patch = {
+        "Jc": str(pick("Jc", "jc")),
+        "Jmin": str(pick("Jmin", "jmin")),
+        "Jmax": str(pick("Jmax", "jmax")),
+    }
+    if str(version) != "1.0":
+        for n in range(1, 6):
+            v = pick(f"I{n}", f"i{n}")
+            patch[f"I{n}"] = str(v) if v is not None else "0"
+    return patch
+
+
+# --------------------------------------------------------------------------
+# Container merge — combine multiple vpn:// keys into one master config
+# --------------------------------------------------------------------------
+def merge_vpn_configs(configs: list) -> dict:
+    """Merge ≥2 decoded VpnConfig dicts into one, deduping containers by name.
+
+    Mirrors Architect's mergeVpnConfigs: keep the first container for a given
+    name (warn on dupes), take metadata from the first key, join descriptions
+    with " + ". Lets a user combine e.g. an AWG key with an XRay key.
+
+    Returns {merged, warnings, stats:{total,unique,dupes}}.
+    """
+    if not configs or len(configs) < 2:
+        raise ValueError("need at least 2 configs to merge")
+
+    merged_containers: list = []
+    seen: dict[str, int] = {}
+    warnings: list[str] = []
+    dupes = 0
+    total = 0
+
+    for cfg_idx, cfg in enumerate(configs):
+        for c in (cfg.get("containers") or []):
+            total += 1
+            name = c.get("container") or f"unknown_{cfg_idx}_{total}"
+            if name in seen:
+                dupes += 1
+                warnings.append(
+                    f"duplicate container '{name}' from key #{cfg_idx + 1} "
+                    f"skipped (already from key #{seen[name]})")
+            else:
+                seen[name] = cfg_idx + 1
+                merged_containers.append(c)
+
+    first = configs[0]
+    descs = [c.get("description") or "" for c in configs]
+    descs = [d for d in descs if d]
+    uniq_descs = list(dict.fromkeys(descs))  # order-preserving unique
+
+    def first_with(key):
+        for c in configs:
+            if c.get(key):
+                return c[key]
+        return ""
+
+    merged = {
+        "containers": merged_containers,
+        "defaultContainer": first.get("defaultContainer")
+        or (merged_containers[0].get("container") if merged_containers else "") or "",
+        "description": " + ".join(uniq_descs) or "Merged",
+        "dns1": first.get("dns1") or first_with("dns1"),
+        "dns2": first.get("dns2") or first_with("dns2"),
+        "hostName": first.get("hostName") or "",
+        "nameOverriddenByUser": True,
+    }
+    return {
+        "merged": merged,
+        "warnings": warnings,
+        "stats": {"total": total, "unique": len(merged_containers), "dupes": dupes},
+    }
+
+
+def merge_links(vpn_links: list) -> dict:
+    """Decode several vpn:// links, container-merge them, return {link, ...}."""
+    decoded = [vpn_decode(s) for s in vpn_links]
+    res = merge_vpn_configs(decoded)
+    res["link"] = vpn_encode(res["merged"])
+    return res

@@ -26,7 +26,7 @@ import secrets
 import subprocess
 import sys
 import tempfile
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import PlainTextResponse
@@ -41,8 +41,18 @@ try:
         generate as genlib_generate,
         validate as genlib_validate,
         merge_into_link as genlib_merge_into_link,
+        merge_links as genlib_merge_links,
         generate_preset as genlib_generate_preset,
         list_presets as genlib_list_presets,
+        describe_presets as genlib_describe_presets,
+        list_profiles as genlib_list_profiles,
+        list_browsers as genlib_list_browsers,
+        host_pool as genlib_host_pool,
+        host_pool_summary as genlib_host_pool_summary,
+        host_pool_tiered as genlib_host_pool_tiered,
+        tier_definitions as genlib_tier_definitions,
+        MIMIC_PROFILES as GENLIB_PROFILES,
+        BROWSER_PROFILES as GENLIB_BROWSERS,
     )
     GENLIB_OK = True
 except ImportError:  # pragma: no cover
@@ -420,12 +430,25 @@ class GeoSplitRequest(BaseModel):
 
 class GenerateRequest(BaseModel):
     preset: Optional[str] = None          # if set, overrides the knobs below
-    version: str = "2.0"
-    intensity: str = "medium"
-    extreme: bool = False
-    router_mode: bool = False
-    cps: bool = True
+    version: str = "2.0"                   # 1.0 | 1.5 | 2.0
+    intensity: str = "medium"             # low | medium | high
+    profile: str = "quic_initial"         # mimicry profile (see /v1/profiles)
+    extreme: bool = False                  # widen S3/S4 + Jc ceiling + tighter H
+    router_mode: bool = False             # minimal sizes for low-power routers
+    cps: bool = True                       # emit the I1-I5 CPS chain (AWG 2.0)
     mtu: int = 1280
+    # full Architect knobs (optional)
+    browser_profile: str = ""             # chrome|edge|firefox|safari|yandex_*|""
+    use_browser_fp: bool = False
+    mimic_all: bool = False                # mimic every I-slot (vs entropy fill)
+    custom_host: str = ""                  # pin the fake SNI/host
+    junk_level: int = 5                    # Jc base
+    use_tag_c: bool = True
+    use_tag_t: bool = True
+    use_tag_r: bool = True
+    use_tag_rc: bool = True
+    use_tag_rd: bool = False
+    seed: Optional[int] = None             # reproducible output
 
 
 class ValidateRequest(BaseModel):
@@ -436,6 +459,10 @@ class ValidateRequest(BaseModel):
 class MergeRequest(BaseModel):
     link: str                              # a vpn:// link
     params: dict                           # {Jc,Jmin,Jmax,I1..I5} to patch in
+
+
+class MergeLinksRequest(BaseModel):
+    links: List[str]                       # ≥2 vpn:// links to container-merge
 
 
 # --------------------------------------------------------------------------
@@ -671,8 +698,38 @@ def _require_genlib() -> None:
 
 @app.get("/v1/presets", dependencies=authed)
 def presets() -> dict:
+    """Named scenario presets (with labels/descriptions for the panel picker)."""
     _require_genlib()
-    return {"presets": genlib_list_presets()}
+    return {"presets": genlib_list_presets(), "details": genlib_describe_presets()}
+
+
+@app.get("/v1/profiles", dependencies=authed)
+def profiles() -> dict:
+    """Mimicry profiles, browser fingerprints, intensities, versions (UI metadata)."""
+    _require_genlib()
+    return {
+        "profiles": genlib_list_profiles(),
+        "browsers": genlib_list_browsers(),
+        "intensities": ["low", "medium", "high"],
+        "versions": ["1.0", "1.5", "2.0"],
+        "host_pool_summary": genlib_host_pool_summary(),
+    }
+
+
+@app.get("/v1/hostpools/{profile}", dependencies=authed)
+def hostpool(profile: str, tiered: bool = False) -> dict:
+    """The fake-host/SNI pool for a profile (for a custom-host picker).
+
+    ``?tiered=true`` annotates each host with its Architect tier + note and
+    includes the tier taxonomy.
+    """
+    _require_genlib()
+    if profile not in GENLIB_PROFILES:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="unknown profile")
+    if tiered:
+        return {"profile": profile, "hosts": genlib_host_pool_tiered(profile),
+                "tiers": genlib_tier_definitions()}
+    return {"profile": profile, "hosts": genlib_host_pool(profile)}
 
 
 @app.post("/v1/generate", dependencies=authed)
@@ -680,14 +737,26 @@ def generate_params(req: GenerateRequest) -> dict:
     _require_genlib()
     try:
         if req.preset:
-            params = genlib_generate_preset(req.preset)
+            params = genlib_generate_preset(req.preset, seed=req.seed)
+            used = {"preset": req.preset}
         else:
-            params = genlib_generate(version=req.version, intensity=req.intensity,
-                                     extreme=req.extreme, router_mode=req.router_mode,
-                                     cps=req.cps, mtu=req.mtu)
+            params = genlib_generate(
+                version=req.version, intensity=req.intensity, profile=req.profile,
+                extreme=req.extreme, router_mode=req.router_mode, cps=req.cps,
+                mtu=req.mtu, browser_profile=req.browser_profile,
+                use_browser_fp=req.use_browser_fp, mimic_all=req.mimic_all,
+                custom_host=req.custom_host, junk_level=req.junk_level,
+                use_tag_c=req.use_tag_c, use_tag_t=req.use_tag_t,
+                use_tag_r=req.use_tag_r, use_tag_rc=req.use_tag_rc,
+                use_tag_rd=req.use_tag_rd, seed=req.seed,
+            )
+            used = {"version": req.version, "intensity": req.intensity,
+                    "profile": req.profile, "extreme": req.extreme,
+                    "router_mode": req.router_mode, "cps": req.cps}
     except (KeyError, ValueError) as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(e))
-    return {"params": params, "validation": genlib_validate(params, mtu=req.mtu)}
+    return {"params": params, "validation": genlib_validate(params, mtu=req.mtu),
+            "used": used}
 
 
 @app.post("/v1/validate", dependencies=authed)
@@ -702,6 +771,18 @@ def merge_link(req: MergeRequest) -> dict:
     _require_genlib()
     try:
         return {"link": genlib_merge_into_link(req.link, req.params)}
+    except ValueError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"invalid vpn:// link: {e}")
+
+
+@app.post("/v1/merge-links", dependencies=authed)
+def merge_multi_links(req: MergeLinksRequest) -> dict:
+    """Container-merge ≥2 vpn:// links into one master key (AWG + XRay, etc.)."""
+    _require_genlib()
+    if len(req.links) < 2:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="need at least 2 links")
+    try:
+        return genlib_merge_links(req.links)
     except ValueError as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"invalid vpn:// link: {e}")
 

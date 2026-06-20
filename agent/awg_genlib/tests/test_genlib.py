@@ -137,3 +137,257 @@ def test_generate_router_mode_small_s():
 def test_every_preset_generates_valid(name):
     p = generate_preset(name, seed=99)
     assert validate(p)["ok"], (name, validate(p)["errors"])
+
+
+# ===========================================================================
+# Full Architect-fidelity coverage (ported from generator.test.ts /
+# generator-protocols.test.ts plus the new full-port surface).
+# ===========================================================================
+import re  # noqa: E402
+
+from awg_genlib import (  # noqa: E402
+    gen_cfg, GeneratorInput, MIMIC_PROFILES, BROWSER_PROFILES, INTENSITIES,
+    list_profiles, list_browsers, host_pool, host_pool_summary, PROFILE_LABELS,
+    merge_vpn_configs, merge_links, build_obfuscation_patch, get_client_fields,
+    describe_presets,
+)
+from awg_genlib.generator import (  # noqa: E402
+    rnd, rh, hex_pad, assert_even_hex, r_range, split_pad, tag_overhead,
+    calc_padding, align_to_128, gen_i1, _seed,
+)
+
+I_TAG = re.compile(r"^(<(b 0x[0-9a-fA-F]*|t|c|r \d+|rc \d+|rd \d+|d|ds|dz)>)+$")
+
+
+# ----------------------------- primitives -------------------------------
+def test_rh_length_and_charset():
+    assert rh(0) == ""
+    assert len(rh(4)) == 8 and len(rh(16)) == 32
+    assert re.match(r"^[0-9a-f]*$", rh(32))
+
+
+def test_hex_pad():
+    assert hex_pad(0, 4) == "00000000"
+    assert hex_pad(1, 4) == "00000001"
+    assert hex_pad(255, 2) == "00ff"
+    assert len(hex_pad(0x1ff, 1)) == 2  # overflow truncated to byte_len
+
+
+def test_assert_even_hex():
+    assert assert_even_hex("aabb") == "aabb"
+    assert assert_even_hex("") == ""
+    assert assert_even_hex("abc") == "abc0"
+
+
+def test_split_pad():
+    assert split_pad(0) == ""
+    assert split_pad(500) == "<r 500>"
+    assert split_pad(1000) == "<r 1000>"
+    assert split_pad(1200) == "<r 1000><r 200>"
+    assert split_pad(2500) == "<r 1000><r 1000><r 500>"
+    assert split_pad(1200, "rd") == "<rd 1000><rd 200>"
+
+
+def test_tag_overhead():
+    assert tag_overhead(False, False) == 0
+    assert tag_overhead(True, False) == 4
+    assert tag_overhead(False, True) == 4
+    assert tag_overhead(True, True) == 8
+
+
+def test_calc_padding():
+    # pads to reach minimum: occupied 48, range [1250,1250] -> 1202
+    assert calc_padding(40, 8, (1250, 1250), 2, 1500) == 1202
+    # MTU clamp: mtu 100 -> <= 52
+    assert calc_padding(40, 8, (1250, 1350), 2, 100) <= 52
+    # occupied >= max -> 0
+    assert calc_padding(1300, 0, (1250, 1300), 2, 1500) == 0
+    # entropy mode (no range) <= 500
+    for _ in range(50):
+        assert 0 <= calc_padding(40, 8, None, 2, 1500) <= 500
+
+
+def test_align_to_128():
+    assert align_to_128(0) == 0
+    assert align_to_128(128) == 128
+    assert align_to_128(129) == 256
+    assert align_to_128(1) == 128
+    assert align_to_128(256) == 256
+
+
+def test_r_range_format():
+    _seed(1)
+    for _ in range(50):
+        s = r_range(100_000_000)
+        assert re.match(r"^\d+-\d+$", s)
+        n, m = (int(x) for x in s.split("-"))
+        assert n >= 100_000_000 and 1000 <= (m - n) <= 50_000
+
+
+# --------------------------- protocol builders (genI1) -------------------
+_PROTOCOL_PROFILES = ["quic_initial", "quic_0rtt", "tls_client_hello",
+                      "wireguard_noise", "dtls", "http3", "sip"]
+
+
+@pytest.mark.parametrize("profile", _PROTOCOL_PROFILES)
+def test_geni1_shape(profile):
+    inp = GeneratorInput(profile=profile, use_tag_c=False, use_tag_t=True,
+                         use_tag_r=True, use_tag_rc=True, use_tag_rd=True, mtu=1500)
+    r = gen_i1(inp, profile, 0)
+    assert r and isinstance(r, str)
+    assert "<b 0x" in r
+    for m in re.findall(r"<b 0x([0-9a-fA-F]+)>", r):
+        assert len(m) % 2 == 0           # even-length hex inside <b 0x...>
+    assert "<t>" in r                    # useTagT
+    assert I_TAG.match(r), r             # whole chain is a valid CPS sequence
+
+
+@pytest.mark.parametrize("profile", _PROTOCOL_PROFILES)
+def test_geni1_respects_tag_flags(profile):
+    off = GeneratorInput(profile=profile, use_tag_r=False, use_tag_c=False)
+    assert "<r " not in gen_i1(off, profile, 0)
+    on = GeneratorInput(profile=profile, use_tag_c=True, use_tag_rc=True)
+    r = gen_i1(on, on.profile, 0)
+    assert "<rc " in r
+    # mk_noise faithfully omits the <c> counter tag (matches Architect); all
+    # other builders honour use_tag_c.
+    if profile != "wireguard_noise":
+        assert "<c>" in r
+
+
+def test_geni1_random_nonempty():
+    assert gen_i1(GeneratorInput(profile="random"), "random", 0)
+
+
+def test_custom_host_is_used():
+    inp = GeneratorInput(profile="sip", custom_host="sip.example.org")
+    hexpart = re.search(r"<b 0x([0-9a-f]+)>", gen_i1(inp, "sip", 0)).group(1)
+    assert bytes.fromhex(hexpart).startswith(b"REGISTER sip:sip.example.org")
+
+
+# ----------------------- gen_cfg composite / dns ------------------------
+def test_gencfg_tls_to_quic_composite():
+    c = gen_cfg(GeneratorInput(profile="tls_to_quic", intensity="medium"))
+    assert c["i1"].startswith("<b 0x160301")          # I1 = TLS ClientHello
+    flag = c["i2"][len("<b 0x"):len("<b 0x") + 2].lower()
+    assert flag in ("c0", "c1", "c2", "c3")           # I2 = QUIC Initial
+
+
+def test_gencfg_quic_burst_composite():
+    c = gen_cfg(GeneratorInput(profile="quic_burst", intensity="high"))
+    assert all(c[k] for k in ("i1", "i2", "i3", "i4", "i5"))
+
+
+def test_gencfg_dns_query():
+    c = gen_cfg(GeneratorInput(profile="dns_query", mimic_all=True, intensity="low"))
+    assert "0100" in c["i1"]                            # DNS standard-query flags
+
+
+def test_gencfg_router_disables_extra_cps():
+    c = gen_cfg(GeneratorInput(profile="quic_initial", router_mode=True))
+    assert c["i1"] and not (c["i2"] or c["i3"] or c["i4"] or c["i5"])
+
+
+def test_gencfg_h_ranges_never_overlap():
+    for s in range(20):
+        p = generate(seed=s, intensity="high", extreme=(s % 2 == 0))
+        assert validate(p)["ok"], validate(p)["errors"]
+
+
+@pytest.mark.parametrize("profile", list(MIMIC_PROFILES))
+@pytest.mark.parametrize("version", ["1.0", "1.5", "2.0"])
+def test_generate_every_profile_version_valid(profile, version):
+    p = generate(version=version, profile=profile, intensity="high", seed=11,
+                 use_browser_fp=True, browser_profile="chrome")
+    r = validate(p, mtu=1280)
+    assert r["ok"], (profile, version, r["errors"])
+    if version == "1.0":
+        assert "I1" not in p
+
+
+@pytest.mark.parametrize("browser", list(BROWSER_PROFILES))
+def test_browser_fp_pads_quic_initial(browser):
+    # With a browser fingerprint on QUIC Initial, the packet is padded toward the
+    # BFP target (>= ~1000 bytes of <r> padding at a generous MTU).
+    inp = GeneratorInput(profile="quic_initial", use_browser_fp=True,
+                         browser_profile=browser, mtu=1500, intensity="high")
+    _seed(5)
+    s = gen_i1(inp, "quic_initial", 3)
+    total = sum(int(x) for x in re.findall(r"<r (\d+)>", s))
+    assert total >= 1000, (browser, total)
+
+
+# ------------------------- mergekeys extras -----------------------------
+def test_get_client_fields():
+    assert get_client_fields("1.0") == ["Jc", "Jmin", "Jmax"]
+    assert get_client_fields("2.0") == ["Jc", "Jmin", "Jmax", "I1", "I2", "I3", "I4", "I5"]
+
+
+def test_build_obfuscation_patch_from_gencfg():
+    patch = build_obfuscation_patch(gen_cfg(GeneratorInput()), version="2.0")
+    assert set(patch) == {"Jc", "Jmin", "Jmax", "I1", "I2", "I3", "I4", "I5"}
+    assert all(isinstance(v, str) for v in patch.values())
+    patch1 = build_obfuscation_patch(gen_cfg(GeneratorInput(version="1.0")), version="1.0")
+    assert set(patch1) == {"Jc", "Jmin", "Jmax"}
+
+
+def test_merge_vpn_configs_dedup():
+    a = {"containers": [{"container": "amnezia-awg", "awg": {"Jc": "4"}}],
+         "defaultContainer": "amnezia-awg", "description": "A"}
+    b = {"containers": [{"container": "amnezia-xray", "xray": {}},
+                        {"container": "amnezia-awg", "awg": {"Jc": "9"}}],
+         "description": "B"}
+    m = merge_vpn_configs([a, b])
+    assert m["stats"] == {"total": 3, "unique": 2, "dupes": 1}
+    names = [c["container"] for c in m["merged"]["containers"]]
+    assert names == ["amnezia-awg", "amnezia-xray"]      # first AWG wins
+    assert m["merged"]["description"] == "A + B"
+    assert len(m["warnings"]) == 1
+
+
+def test_merge_vpn_configs_needs_two():
+    with pytest.raises(ValueError):
+        merge_vpn_configs([{"containers": []}])
+
+
+def test_merge_links_roundtrip():
+    a = vpn_encode({"containers": [{"container": "amnezia-awg", "awg": {"Jc": "4"}}],
+                    "description": "A"})
+    b = vpn_encode({"containers": [{"container": "amnezia-xray", "xray": {}}],
+                    "description": "B"})
+    out = merge_links([a, b])
+    merged = vpn_decode(out["link"])
+    assert len(merged["containers"]) == 2 and out["stats"]["unique"] == 2
+
+
+# ------------------------- introspection --------------------------------
+def test_list_profiles_complete():
+    profs = list_profiles()
+    assert len(profs) == len(PROFILE_LABELS) == 11
+    assert {p["key"] for p in profs} == set(MIMIC_PROFILES)
+
+
+def test_list_browsers_and_pools():
+    assert set(list_browsers()) == set(BROWSER_PROFILES)
+    summ = host_pool_summary()
+    assert summ["tls_client_hello"] > 100 and summ["sip"] > 50
+    assert "8.8.8.8" in host_pool("dns_query")           # dns_query -> dns IP pool
+    assert "yandex.net" in host_pool("quic_initial")
+
+
+def test_describe_presets_metadata():
+    desc = describe_presets()
+    assert {d["name"] for d in desc} == set(list_presets())
+    assert all(d["label"] and d["description"] for d in desc)
+
+
+def test_host_pool_tiered():
+    from awg_genlib import host_pool_tiered, tier_definitions
+    tiered = host_pool_tiered("quic_initial")
+    assert any(h["host"] == "yandex.net" and h["tier"] == "ru-domestic" for h in tiered)
+    # http3 reuses the quic_initial tiered pool
+    assert host_pool_tiered("http3")[0]["tier"]
+    # dns has no tiered data -> flat fallback with tier "unknown"
+    dns = host_pool_tiered("dns_query")
+    assert dns and all(h["tier"] == "unknown" for h in dns)
+    assert "ru-domestic" in tier_definitions()

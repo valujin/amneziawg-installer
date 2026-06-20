@@ -316,6 +316,72 @@ def test_genlib_merge(client, agent):
     assert vpn_decode(r.json()["link"])["containers"][0]["awg"]["Jc"] == "9"
 
 
+def test_genlib_presets_have_details(client):
+    body = client.get("/v1/presets", headers=AUTH).json()
+    assert "home" in body["presets"]
+    names = {d["name"] for d in body["details"]}
+    assert names == set(body["presets"])
+    assert all(d["label"] and d["description"] for d in body["details"])
+
+
+def test_genlib_profiles_metadata(client):
+    body = client.get("/v1/profiles", headers=AUTH).json()
+    keys = {p["key"] for p in body["profiles"]}
+    assert {"quic_initial", "tls_to_quic", "dns_query", "random"} <= keys
+    assert "chrome" in body["browsers"] and "yandex_mobile" in body["browsers"]
+    assert body["host_pool_summary"]["tls_client_hello"] > 100
+
+
+def test_genlib_hostpool_lookup(client):
+    r = client.get("/v1/hostpools/quic_initial", headers=AUTH)
+    assert r.status_code == 200 and "yandex.net" in r.json()["hosts"]
+    # dns_query maps to the DNS-IP pool
+    assert "8.8.8.8" in client.get("/v1/hostpools/dns_query", headers=AUTH).json()["hosts"]
+    assert client.get("/v1/hostpools/bogus", headers=AUTH).status_code == 404
+
+
+def test_genlib_hostpool_tiered(client):
+    body = client.get("/v1/hostpools/quic_initial", headers=AUTH, params={"tiered": "true"}).json()
+    assert any(h["host"] == "yandex.net" and h["tier"] == "ru-domestic" for h in body["hosts"])
+    assert "ru-domestic" in body["tiers"]
+
+
+def test_genlib_generate_full_knobs(client):
+    r = client.post("/v1/generate", headers=AUTH, json={
+        "profile": "tls_to_quic", "intensity": "high", "browser_profile": "chrome",
+        "use_browser_fp": True, "mimic_all": True, "seed": 7, "mtu": 1280,
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["validation"]["ok"] is True
+    assert body["used"]["profile"] == "tls_to_quic"
+    assert body["params"]["I1"].startswith("<b 0x160301")  # TLS ClientHello
+
+
+def test_genlib_generate_seed_reproducible(client):
+    a = client.post("/v1/generate", headers=AUTH, json={"profile": "quic_initial", "seed": 99}).json()
+    b = client.post("/v1/generate", headers=AUTH, json={"profile": "quic_initial", "seed": 99}).json()
+    assert a["params"] == b["params"]
+
+
+def test_genlib_generate_bad_profile_400(client):
+    assert client.post("/v1/generate", headers=AUTH,
+                       json={"profile": "no-such"}).status_code == 400
+
+
+def test_genlib_merge_links_container_merge(client):
+    from awg_genlib import vpn_encode, vpn_decode
+    a = vpn_encode({"containers": [{"container": "amnezia-awg", "awg": {"Jc": "4"}}], "description": "A"})
+    b = vpn_encode({"containers": [{"container": "amnezia-xray", "xray": {}}], "description": "B"})
+    r = client.post("/v1/merge-links", headers=AUTH, json={"links": [a, b]})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["stats"]["unique"] == 2
+    assert len(vpn_decode(body["link"])["containers"]) == 2
+    # single link rejected
+    assert client.post("/v1/merge-links", headers=AUTH, json={"links": [a]}).status_code == 400
+
+
 def test_manage_failure_surfaces_500(client, agent, monkeypatch):
     def boom(args, timeout=None):
         return types.SimpleNamespace(returncode=1, stdout="", stderr="kaboom")
