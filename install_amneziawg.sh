@@ -53,6 +53,10 @@ _APT_UPDATED=0
 CLI_PORT=""; CLI_SUBNET=""; CLI_DISABLE_IPV6="default"
 CLI_ROUTING_MODE="default"; CLI_CUSTOM_ROUTES=""; CLI_ENDPOINT=""; CLI_NO_TWEAKS=0
 CLI_CONF=""
+# Dual-stack IPv6 внутри туннеля: по умолчанию ВКЛЮЧЕН (anti-leak — клиент
+# получает IPv6-адрес и весь его IPv6 заворачивается в VPN). --no-ipv6-tunnel
+# отключает (поведение как до v5.15: только IPv4 у клиента).
+CLI_NO_IPV6_TUNNEL=0
 
 # --- Автоочистка временных файлов ---
 _install_temp_files=()
@@ -76,6 +80,8 @@ while [[ $# -gt 0 ]]; do
         --subnet=*)      CLI_SUBNET="${1#*=}" ;;
         --allow-ipv6)    CLI_DISABLE_IPV6=0 ;;
         --disallow-ipv6) CLI_DISABLE_IPV6=1 ;;
+        --no-ipv6-tunnel)   CLI_NO_IPV6_TUNNEL=1 ;;
+        --allow-ipv6-tunnel) CLI_NO_IPV6_TUNNEL=0 ;;  # явное вкл (это и так дефолт)
         --route-all)     CLI_ROUTING_MODE=1 ;;
         --route-amnezia) CLI_ROUTING_MODE=2 ;;
         --route-custom=*) CLI_ROUTING_MODE=3; CLI_CUSTOM_ROUTES="${1#*=}" ;;
@@ -556,6 +562,61 @@ configure_ipv6() {
     log "Отключение IPv6: $(if [ "$DISABLE_IPV6" -eq 1 ]; then echo 'Да'; else echo 'Нет'; fi)"
 }
 
+# detect_native_ipv6 -> echo 1, если у сервера есть НАСТОЯЩИЙ выход в IPv6-интернет:
+# глобальный НЕ-ULA адрес И дефолтный IPv6-маршрут (только global-scope мало —
+# ULA fc00::/7 тоже global-scope, но в интернет не ходит).
+detect_native_ipv6() {
+    local have_addr=0 have_route=0
+    if ip -6 addr show scope global 2>/dev/null \
+        | grep -oP 'inet6\s+\K[0-9a-fA-F:]+' \
+        | grep -qviE '^(fc|fd)'; then
+        have_addr=1
+    fi
+    if ip -6 route show default 2>/dev/null | grep -q .; then
+        have_route=1
+    fi
+    if [[ "$have_addr" -eq 1 && "$have_route" -eq 1 ]]; then echo 1; else echo 0; fi
+}
+
+# configure_ipv6_tunnel — dual-stack IPv6 внутри туннеля. По умолчанию ВКЛЮЧЕН
+# (anti-leak): клиент получает IPv6-адрес и весь его IPv6-трафик заворачивается в
+# VPN, даже если у сервера нет нативного IPv6 (тогда такой трафик отбрасывается на
+# сервере, а не утекает мимо туннеля). Отключается --no-ipv6-tunnel.
+# Требует хостового IPv6-форвардинга, поэтому при включении переопределяет
+# --disallow-ipv6 (DISABLE_IPV6=0) и снимает рантайм-disable_ipv6.
+configure_ipv6_tunnel() {
+    if [[ "$CLI_NO_IPV6_TUNNEL" -eq 1 ]]; then
+        ALLOW_IPV6_TUNNEL=0
+    else
+        ALLOW_IPV6_TUNNEL=${ALLOW_IPV6_TUNNEL:-1}
+    fi
+    : "${IPV6_SUBNET:=fddd:2c4:2c4:2c4::/64}"
+
+    if [[ "$ALLOW_IPV6_TUNNEL" -eq 1 ]]; then
+        if [[ "${DISABLE_IPV6:-1}" -eq 1 ]]; then
+            log_warn "IPv6-туннель требует хостовый IPv6-форвардинг — переопределяю отключение IPv6 (DISABLE_IPV6=0)."
+            DISABLE_IPV6=0
+        fi
+        # Снимаем рантайм-disable, чтобы апгрейд с IPv6-выключенной установки
+        # не дал ложноотрицательную детекцию ниже.
+        sysctl -w net.ipv6.conf.all.disable_ipv6=0 >/dev/null 2>&1 || true
+        sysctl -w net.ipv6.conf.default.disable_ipv6=0 >/dev/null 2>&1 || true
+        sysctl -w net.ipv6.conf.lo.disable_ipv6=0 >/dev/null 2>&1 || true
+    fi
+
+    SERVER_HAS_NATIVE_IPV6=$(detect_native_ipv6)
+    if [[ "$ALLOW_IPV6_TUNNEL" -eq 1 ]]; then
+        if [[ "$SERVER_HAS_NATIVE_IPV6" -eq 1 ]]; then
+            log "IPv6-туннель: ВКЛ (нативный IPv6 есть — клиенты выходят в IPv6-интернет через VPN)."
+        else
+            log "IPv6-туннель: ВКЛ (нативного IPv6 нет — IPv6-трафик клиента не утекает: заворачивается в VPN и отбрасывается на сервере)."
+        fi
+    else
+        log "IPv6-туннель: ВЫКЛ (--no-ipv6-tunnel) — клиенты только IPv4."
+    fi
+    export ALLOW_IPV6_TUNNEL IPV6_SUBNET SERVER_HAS_NATIVE_IPV6 DISABLE_IPV6
+}
+
 # Безопасная загрузка конфигурации (whitelist-парсер, без source/eval)
 safe_load_config() {
     local config_file="${1:-$CONFIG_FILE}"
@@ -584,6 +645,7 @@ safe_load_config() {
             case "$key" in
                 OS_ID|OS_VERSION|OS_CODENAME|AWG_PORT|AWG_TUNNEL_SUBNET|\
                 DISABLE_IPV6|ALLOWED_IPS_MODE|ALLOWED_IPS|AWG_ENDPOINT|AWG_MTU|\
+                ALLOW_IPV6_TUNNEL|IPV6_SUBNET|SERVER_HAS_NATIVE_IPV6|\
                 AWG_Jc|AWG_Jmin|AWG_Jmax|AWG_S1|AWG_S2|AWG_S3|AWG_S4|\
                 AWG_H1|AWG_H2|AWG_H3|AWG_H4|AWG_I1|AWG_I2|AWG_I3|AWG_I4|AWG_I5|AWG_PRESET|NO_TWEAKS|AWG_APPLY_MODE|\
                 AWG_ROLE|DEFAULT_EXIT|GEO_SPLIT_ENABLED|RU_IPSET_URL|RU_LIST_UPDATE_CRON|RU_LIST_MAX_AGE_DAYS)
@@ -1940,6 +2002,10 @@ initialize_setup() {
     if [[ "$ALLOWED_IPS_MODE" == "default" ]]; then ALLOWED_IPS_MODE=2; fi
     if [[ -z "$ALLOWED_IPS" ]]; then configure_routing_mode; fi
 
+    # Dual-stack IPv6-туннель (по умолчанию ВКЛ, anti-leak). Запускается ПОСЛЕ
+    # финализации DISABLE_IPV6 — может переопределить его на 0, если туннель включён.
+    configure_ipv6_tunnel
+
     # Проверка порта (пропускаем если AWG-сервис уже слушает этот порт)
     if ! systemctl is-active --quiet awg-quick@awg0 2>/dev/null; then
         check_port_availability "$AWG_PORT" || die "Порт $AWG_PORT/udp занят."
@@ -1974,6 +2040,10 @@ export ALLOWED_IPS_MODE=${ALLOWED_IPS_MODE}
 export ALLOWED_IPS='${ALLOWED_IPS}'
 export AWG_ENDPOINT='${AWG_ENDPOINT}'
 export AWG_MTU=${AWG_MTU:-1280}
+# Dual-stack IPv6 туннель (anti-leak): клиенты получают IPv6-адрес + ::/0
+export ALLOW_IPV6_TUNNEL=${ALLOW_IPV6_TUNNEL:-1}
+export IPV6_SUBNET='${IPV6_SUBNET:-fddd:2c4:2c4:2c4::/64}'
+export SERVER_HAS_NATIVE_IPV6=${SERVER_HAS_NATIVE_IPV6:-0}
 # AWG 2.0 Parameters
 export AWG_Jc=${AWG_Jc}
 export AWG_Jmin=${AWG_Jmin}
