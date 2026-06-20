@@ -209,9 +209,13 @@ def run_xray(args: list[str], timeout: Optional[int] = None) -> subprocess.Compl
 
 
 def xray_keygen() -> dict:
-    """Generate a REALITY x25519 keypair + uuid + shortId via awg-xray.sh keygen."""
+    """Generate a REALITY x25519 keypair + uuid + shortId via awg-xray.sh keygen.
+
+    Generous timeout: the first keygen also triggers ensure_bin, which downloads
+    the Xray release (~21 MB) + geodata — can be slow from a censored uplink.
+    """
     try:
-        proc = run_xray(["keygen"], timeout=60)
+        proc = run_xray(["keygen"], timeout=240)
     except (subprocess.TimeoutExpired, FileNotFoundError) as e:
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"xray keygen failed: {e}")
     if proc.returncode != 0:
