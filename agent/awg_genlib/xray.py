@@ -67,38 +67,48 @@ def _norm_dest(dest: str) -> tuple[str, str]:
 
 
 def _reality_inbound(listen_port: int, dest: str, sni: str, private_key: str,
-                     short_ids: list[str], clients: list[dict]) -> dict:
-    """A VLESS + XTLS-Vision + REALITY inbound (raw TCP:443)."""
+                     short_ids: list[str], clients: list[dict],
+                     transport: str = "vision", path: str = "/") -> dict:
+    """A VLESS + REALITY inbound.
+
+    transport='vision' → XTLS-Vision over raw TCP (max throughput; best blend on
+    permissive networks). transport='xhttp' → VLESS-over-XHTTP (HTTP/2 framing);
+    the flow looks like ordinary web browsing, which survives RU TSPU TLS-flow
+    policing that severs a raw Vision tunnel. XHTTP clients MUST NOT set `flow`.
+    """
     dest_hostport, dest_host = _norm_dest(dest)
     server_names = [sni or dest_host]
-    # Always allow the empty shortId (matches the REALITY '' convention) +
-    # every per-client shortId.
+    # Always allow the empty shortId (REALITY '' convention) + every per-client id.
     sids = list(dict.fromkeys([""] + [s for s in short_ids if s]))
+    xhttp = (transport == "xhttp")
+    client_entries = []
+    for c in clients:
+        entry = {"id": c["id"], "email": c.get("email", c["id"][:8])}
+        if not xhttp:
+            entry["flow"] = DEFAULT_FLOW   # Vision is TCP-only; XHTTP must omit flow
+        client_entries.append(entry)
+    stream = {
+        "network": "xhttp" if xhttp else "tcp",
+        "security": "reality",
+        "realitySettings": {
+            "show": False,
+            "dest": dest_hostport,
+            "xver": 0,
+            "serverNames": server_names,
+            "privateKey": private_key,
+            "shortIds": sids,
+            "maxTimeDiff": 0,
+        },
+    }
+    if xhttp:
+        stream["xhttpSettings"] = {"path": path, "mode": "auto"}
     return {
         "tag": "vless-in",
         "listen": "0.0.0.0",
         "port": int(listen_port),
         "protocol": "vless",
-        "settings": {
-            "clients": [
-                {"id": c["id"], "flow": DEFAULT_FLOW, "email": c.get("email", c["id"][:8])}
-                for c in clients
-            ],
-            "decryption": "none",
-        },
-        "streamSettings": {
-            "network": "tcp",
-            "security": "reality",
-            "realitySettings": {
-                "show": False,
-                "dest": dest_hostport,
-                "xver": 0,
-                "serverNames": server_names,
-                "privateKey": private_key,
-                "shortIds": sids,
-                "maxTimeDiff": 0,
-            },
-        },
+        "settings": {"clients": client_entries, "decryption": "none"},
+        "streamSettings": stream,
         "sniffing": {"enabled": True, "destOverride": ["http", "tls", "quic"], "routeOnly": True},
     }
 
@@ -144,11 +154,12 @@ def _base_outbounds() -> list[dict]:
 
 def build_exit_config(listen_port: int, dest: str, sni: str, private_key: str,
                       short_ids: list[str], clients: list[dict],
-                      loglevel: str = "warning") -> dict:
+                      transport: str = "vision", loglevel: str = "warning") -> dict:
     """DE exit: REALITY inbound -> freedom. `clients` = the upstream entries."""
     return {
         "log": {"loglevel": loglevel},
-        "inbounds": [_reality_inbound(listen_port, dest, sni, private_key, short_ids, clients)],
+        "inbounds": [_reality_inbound(listen_port, dest, sni, private_key, short_ids,
+                                      clients, transport=transport)],
         "outbounds": _base_outbounds(),
         "routing": {
             "domainStrategy": "IPIfNonMatch",
@@ -160,7 +171,7 @@ def build_exit_config(listen_port: int, dest: str, sni: str, private_key: str,
 def build_entry_config(listen_port: int, dest: str, sni: str, private_key: str,
                        short_ids: list[str], clients: list[dict],
                        cascade: Optional[dict] = None, geo_split: bool = True,
-                       loglevel: str = "warning") -> dict:
+                       transport: str = "vision", loglevel: str = "warning") -> dict:
     """RU entry: REALITY inbound for end clients.
 
     cascade = {host, port, uuid, pub, sni, sid} → non-RU traffic egresses there;
@@ -184,7 +195,8 @@ def build_entry_config(listen_port: int, dest: str, sni: str, private_key: str,
 
     return {
         "log": {"loglevel": loglevel},
-        "inbounds": [_reality_inbound(listen_port, dest, sni, private_key, short_ids, clients)],
+        "inbounds": [_reality_inbound(listen_port, dest, sni, private_key, short_ids,
+                                      clients, transport=transport)],
         "outbounds": outbounds,
         "routing": {"domainStrategy": "IPIfNonMatch", "rules": rules},
     }
@@ -192,18 +204,27 @@ def build_entry_config(listen_port: int, dest: str, sni: str, private_key: str,
 
 def vless_link(host: str, port: int, uuid: str, public_key: str, sni: str,
                short_id: str = "", fingerprint: str = DEFAULT_FP,
-               label: str = "") -> str:
-    """A vless:// REALITY share link (v2rayNG/Hiddify/NekoBox/sing-box/amnezia)."""
+               label: str = "", transport: str = "vision", path: str = "/") -> str:
+    """A vless:// REALITY share link (v2rayNG/Hiddify/NekoBox/sing-box/amnezia).
+
+    transport='vision' → type=tcp + flow=xtls-rprx-vision.
+    transport='xhttp'  → type=xhttp + path (no flow).
+    """
     params = {
         "encryption": "none",
         "security": "reality",
-        "type": "tcp",
-        "flow": DEFAULT_FLOW,
         "sni": sni,
         "fp": fingerprint or DEFAULT_FP,
         "pbk": public_key,
         "spx": "/",
     }
+    if transport == "xhttp":
+        params["type"] = "xhttp"
+        params["path"] = path
+        params["mode"] = "auto"
+    else:
+        params["type"] = "tcp"
+        params["flow"] = DEFAULT_FLOW
     if short_id:
         params["sid"] = short_id
     query = urllib.parse.urlencode(params, safe="/")

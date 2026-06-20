@@ -74,3 +74,21 @@ def test_vless_link_roundtrip():
 def test_vless_link_omits_empty_shortid():
     link = xray.vless_link("h", 443, "u", "pk", "s")
     assert "sid=" not in link
+
+
+def test_xhttp_transport_inbound_and_link():
+    cfg = xray.build_entry_config(443, "ok.ru", "ok.ru", "P", ["aa"],
+                                  [{"id": "u1", "email": "a"}], transport="xhttp")
+    inb = cfg["inbounds"][0]
+    assert inb["streamSettings"]["network"] == "xhttp"
+    assert inb["streamSettings"]["xhttpSettings"]["path"] == "/"
+    # XHTTP clients must NOT carry the Vision flow
+    assert "flow" not in inb["settings"]["clients"][0]
+    link = xray.vless_link("h", 443, "u1", "P", "ok.ru", short_id="aa", transport="xhttp")
+    assert "type=xhttp" in link and "path=" in link and "flow=" not in link
+
+
+def test_vision_remains_default():
+    cfg = xray.build_exit_config(8443, "dl.google.com", None, "P", [], [{"id": "u", "email": "e"}])
+    assert cfg["inbounds"][0]["streamSettings"]["network"] == "tcp"
+    assert cfg["inbounds"][0]["settings"]["clients"][0]["flow"] == "xtls-rprx-vision"

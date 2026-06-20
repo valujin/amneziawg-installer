@@ -274,12 +274,14 @@ def xray_rebuild_and_apply() -> dict:
     cl = [{"id": c["uuid"], "email": c.get("name", c["uuid"][:8])} for c in clients]
     short_ids = [c["shortid"] for c in clients if c.get("shortid")]
     listen = int(srv.get("listen", 443))
+    transport = srv.get("transport", "vision")
     if srv.get("role") == "exit":
-        cfg = genlib_xray_exit(listen, srv["dest"], srv["sni"], srv["private_key"], short_ids, cl)
+        cfg = genlib_xray_exit(listen, srv["dest"], srv["sni"], srv["private_key"],
+                               short_ids, cl, transport=transport)
     else:
         cfg = genlib_xray_entry(listen, srv["dest"], srv["sni"], srv["private_key"],
                                 short_ids, cl, cascade=srv.get("cascade"),
-                                geo_split=bool(srv.get("geo_split", True)))
+                                geo_split=bool(srv.get("geo_split", True)), transport=transport)
     xray_apply_or_raise(cfg, listen)
     return srv
 
@@ -565,6 +567,7 @@ class WstunnelServerRequest(BaseModel):
 
 class RealityServerRequest(BaseModel):
     role: str = "entry"                    # entry | exit
+    transport: str = "vision"             # vision (XTLS-Vision/TCP) | xhttp (HTTP/2, RU-policing-resistant)
     listen_port: int = 443
     dest: str = "dl.google.com"            # real TLS1.3+h2 origin to borrow
     sni: Optional[str] = None              # default = dest host
@@ -831,7 +834,8 @@ def _reality_link_for(srv: dict, client_uuid: str, short_id: str, label: str) ->
     if not host or not GENLIB_OK:
         return ""  # panel can build the link from the public IP it already knows
     return genlib_vless_link(host, int(srv.get("listen", 443)), client_uuid,
-                             srv["public_key"], srv["sni"], short_id=short_id, label=label)
+                             srv["public_key"], srv["sni"], short_id=short_id, label=label,
+                             transport=srv.get("transport", "vision"))
 
 
 @app.get("/v1/reality", dependencies=authed)
@@ -842,6 +846,7 @@ def reality_status() -> dict:
     clients = _xray_read_json(_xray_clients_path(), [])
     return {
         "provisioned": True, "role": srv.get("role"), "listen": srv.get("listen"),
+        "transport": srv.get("transport", "vision"),
         "dest": srv.get("dest"), "sni": srv.get("sni"), "publicKey": srv.get("public_key"),
         "publicHost": srv.get("public_host"), "geoSplit": srv.get("geo_split"),
         "cascade": bool(srv.get("cascade")), "clientsCount": len(clients),
@@ -877,7 +882,8 @@ def reality_provision(req: RealityServerRequest) -> dict:
                    "pub": c["pub"], "sni": c["sni"], "sid": c.get("sid", "")}
     srv = {"role": req.role, "listen": int(req.listen_port), "dest": dest_host, "sni": sni,
            "private_key": priv, "public_key": pub, "public_host": (req.public_host or "").strip(),
-           "geo_split": bool(req.geo_split), "cascade": cascade}
+           "geo_split": bool(req.geo_split), "cascade": cascade,
+           "transport": req.transport if req.transport in ("vision", "xhttp") else "vision"}
     _xray_write_json(_xray_server_path(), srv)
     if _xray_read_json(_xray_clients_path(), None) is None:
         _xray_write_json(_xray_clients_path(), [])
