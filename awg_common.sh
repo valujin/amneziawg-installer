@@ -824,17 +824,24 @@ render_server_config() {
         return 1
     }
 
-    # PostUp/PostDown правила для маршрутизации
-    local postup="iptables -I FORWARD -i %i -j ACCEPT; iptables -t nat -A POSTROUTING -o ${nic} -j MASQUERADE"
-    local postdown="iptables -D FORWARD -i %i -j ACCEPT; iptables -t nat -D POSTROUTING -o ${nic} -j MASQUERADE"
+    # PostUp/PostDown правила для маршрутизации.
+    # TCPMSS clamp на трафик, ВХОДЯЩИЙ в туннель (-o %i): подгоняет MSS в SYN/SYN-ACK
+    # под PMTU туннеля, иначе крупные сегменты от удалённого сервера не влезают в
+    # туннель — по IPv4 это маскирует PMTUD (ICMP frag-needed), а по IPv6
+    # фрагментации в пути нет и ICMPv6 Packet-Too-Big часто фильтруется → TCP-сессия
+    # зависает (handshake/ICMP идут, TLS — нет). Клампим обе версии.
+    local mss4="iptables -t mangle -%OP% FORWARD -o %i -p tcp -m tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu"
+    local mss6="ip6tables -t mangle -%OP% FORWARD -o %i -p tcp -m tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu"
+    local postup="iptables -I FORWARD -i %i -j ACCEPT; iptables -t nat -A POSTROUTING -o ${nic} -j MASQUERADE; ${mss4//%OP%/A}"
+    local postdown="iptables -D FORWARD -i %i -j ACCEPT; iptables -t nat -D POSTROUTING -o ${nic} -j MASQUERADE; ${mss4//%OP%/D}"
 
     # IPv6 forward+NAT: при dual-stack-туннеле ИЛИ при включённом хостовом IPv6.
     # MASQUERADE на ${nic} без нативного IPv6 — безвредный no-op (нет дефолтного
     # IPv6-маршрута), так что peer-to-peer IPv6 внутри туннеля всё равно работает,
     # а наружу клиентский IPv6 не утекает (отбрасывается на сервере).
     if [[ "${ALLOW_IPV6_TUNNEL:-1}" -eq 1 || "${DISABLE_IPV6:-1}" -eq 0 ]]; then
-        postup="${postup}; ip6tables -I FORWARD -i %i -j ACCEPT; ip6tables -t nat -A POSTROUTING -o ${nic} -j MASQUERADE"
-        postdown="${postdown}; ip6tables -D FORWARD -i %i -j ACCEPT; ip6tables -t nat -D POSTROUTING -o ${nic} -j MASQUERADE"
+        postup="${postup}; ip6tables -I FORWARD -i %i -j ACCEPT; ip6tables -t nat -A POSTROUTING -o ${nic} -j MASQUERADE; ${mss6//%OP%/A}"
+        postdown="${postdown}; ip6tables -D FORWARD -i %i -j ACCEPT; ip6tables -t nat -D POSTROUTING -o ${nic} -j MASQUERADE; ${mss6//%OP%/D}"
     fi
 
     # Формируем конфиг через временный файл (атомарная запись)

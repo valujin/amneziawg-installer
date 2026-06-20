@@ -596,7 +596,22 @@ configure_ipv6_tunnel() {
     else
         ALLOW_IPV6_TUNNEL=${ALLOW_IPV6_TUNNEL:-1}
     fi
-    : "${IPV6_SUBNET:=fddd:2c4:2c4:2c4::/64}"
+    # Derive a per-server IPv6 ULA from the (unique) IPv4 tunnel subnet when one
+    # wasn't already chosen/loaded. Two servers in a cascade must NOT share a v6
+    # subnet: the entry connects to the exit as a client, and if both default to
+    # the same fddd:2c4:2c4:2c4::/64 the carrier's v6 address collides with a
+    # client's (return v6 traffic then goes to the wrong interface). Embedding
+    # octets 2+3 of the v4 subnet keeps it deterministic and distinct per server.
+    if [[ -z "${IPV6_SUBNET:-}" ]]; then
+        local _o2 _o3
+        _o2=$(printf '%s' "${AWG_TUNNEL_SUBNET%%/*}" | cut -d. -f2)
+        _o3=$(printf '%s' "${AWG_TUNNEL_SUBNET%%/*}" | cut -d. -f3)
+        if [[ "$_o2" =~ ^[0-9]+$ && "$_o3" =~ ^[0-9]+$ ]]; then
+            IPV6_SUBNET=$(printf 'fddd:2c4:2c4:%x%02x::/64' "$_o2" "$_o3")
+        else
+            IPV6_SUBNET="fddd:2c4:2c4:2c4::/64"
+        fi
+    fi
 
     if [[ "$ALLOW_IPV6_TUNNEL" -eq 1 ]]; then
         if [[ "${DISABLE_IPV6:-1}" -eq 1 ]]; then
