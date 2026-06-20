@@ -20,12 +20,14 @@ See agent/README.md.
 from __future__ import annotations
 
 import ipaddress
+import json
 import os
 import re
 import secrets
 import subprocess
 import sys
 import tempfile
+import uuid as uuidlib
 from typing import List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
@@ -53,6 +55,11 @@ try:
         tier_definitions as genlib_tier_definitions,
         MIMIC_PROFILES as GENLIB_PROFILES,
         BROWSER_PROFILES as GENLIB_BROWSERS,
+        xray_build_entry_config as genlib_xray_entry,
+        xray_build_exit_config as genlib_xray_exit,
+        xray_vless_link as genlib_vless_link,
+        XRAY_DEFAULT_DESTS as GENLIB_XRAY_DESTS,
+        XRAY_DEFAULT_DEST as GENLIB_XRAY_DEST,
     )
     GENLIB_OK = True
 except ImportError:  # pragma: no cover
@@ -82,6 +89,13 @@ class Settings:
         )
         self.cmd_timeout = int(os.environ.get("AWG_CMD_TIMEOUT", "300"))
         self.awg_iface = os.environ.get("AWG_IFACE", "awg0")
+        # VLESS+REALITY (Xray) entry/exit — thin bash manager + agent-owned state.
+        self.xray_script = os.environ.get(
+            "AWG_XRAY", os.path.join(self.awg_dir, "awg-xray.sh")
+        )
+        self.xray_state_dir = os.environ.get(
+            "AWG_XRAY_STATE", os.path.join(self.awg_dir, "xray")
+        )
         self.allow_public = os.environ.get("AWG_AGENT_ALLOW_PUBLIC", "").lower() in ("1", "true", "yes")
 
 
@@ -154,6 +168,116 @@ def run_cmd(cmd: list[str], timeout: int = 15) -> tuple[int, str, str]:
         return proc.returncode, proc.stdout or "", proc.stderr or ""
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
         return 1, "", str(e)
+
+
+# --------------------------------------------------------------------------
+# VLESS+REALITY (Xray) — thin bash driver + agent-owned state
+# --------------------------------------------------------------------------
+# Unlike the WireGuard layer (where manage_amneziawg.sh owns state), the Xray
+# entry/exit has no bash state layer: awg-xray.sh is a thin binary/systemd
+# manager and the agent owns the server params + client registry as JSON, then
+# rebuilds the whole config.json on every change (robust; no in-place surgery).
+def _xray_server_path() -> str:
+    return os.path.join(SETTINGS.xray_state_dir, "server.json")
+
+
+def _xray_clients_path() -> str:
+    return os.path.join(SETTINGS.xray_state_dir, "clients.json")
+
+
+def _xray_read_json(path: str, default):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return default
+
+
+def _xray_write_json(path: str, obj) -> None:
+    os.makedirs(SETTINGS.xray_state_dir, mode=0o700, exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(obj, f)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+
+
+def run_xray(args: list[str], timeout: Optional[int] = None) -> subprocess.CompletedProcess:
+    cmd = ["bash", SETTINGS.xray_script, *args]
+    return subprocess.run(cmd, capture_output=True, text=True,
+                          timeout=timeout or SETTINGS.cmd_timeout, env={**os.environ})
+
+
+def xray_keygen() -> dict:
+    """Generate a REALITY x25519 keypair + uuid + shortId via awg-xray.sh keygen."""
+    try:
+        proc = run_xray(["keygen"], timeout=60)
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"xray keygen failed: {e}")
+    if proc.returncode != 0:
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=f"xray keygen rc={proc.returncode}: {(proc.stderr or '')[-400:]}")
+    out = {}
+    for line in (proc.stdout or "").splitlines():
+        k, _, v = line.strip().partition("=")
+        if k in ("PRIVATE", "PUBLIC", "UUID", "SHORTID") and v:
+            out[k.lower()] = v
+    if not out.get("private") or not out.get("public"):
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="xray keygen produced no keypair")
+    return out
+
+
+def xray_installed() -> bool:
+    return os.path.isfile(_xray_server_path())
+
+
+def xray_active() -> bool:
+    rc, out, _ = run_cmd(["systemctl", "is-active", "awg-xray"])
+    return out.strip().split("\n", 1)[0] == "active"
+
+
+def xray_apply_or_raise(config: dict, listen_port: int) -> None:
+    """Render config.json to a temp file and hand it to awg-xray.sh apply."""
+    try:
+        tmp = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, dir="/tmp")
+    except OSError as e:
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"cannot stage xray config: {e}")
+    try:
+        json.dump(config, tmp, indent=2)
+        tmp.close()
+        try:
+            proc = run_xray(["apply", tmp.name, str(listen_port)])
+        except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+            raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"xray apply failed: {e}")
+        if proc.returncode != 0:
+            tail = (proc.stderr or proc.stdout or "").strip()[-1200:]
+            raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"xray apply rc={proc.returncode}: {tail}")
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+
+
+def xray_rebuild_and_apply() -> dict:
+    """Re-render the entry/exit config.json from stored server params + clients."""
+    if not GENLIB_OK:
+        raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, detail="awg_genlib not deployed (no xray builder)")
+    srv = _xray_read_json(_xray_server_path(), None)
+    if not srv:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="xray server not provisioned (POST /v1/reality/server first)")
+    clients = _xray_read_json(_xray_clients_path(), [])
+    cl = [{"id": c["uuid"], "email": c.get("name", c["uuid"][:8])} for c in clients]
+    short_ids = [c["shortid"] for c in clients if c.get("shortid")]
+    listen = int(srv.get("listen", 443))
+    if srv.get("role") == "exit":
+        cfg = genlib_xray_exit(listen, srv["dest"], srv["sni"], srv["private_key"], short_ids, cl)
+    else:
+        cfg = genlib_xray_entry(listen, srv["dest"], srv["sni"], srv["private_key"],
+                                short_ids, cl, cascade=srv.get("cascade"),
+                                geo_split=bool(srv.get("geo_split", True)))
+    xray_apply_or_raise(cfg, listen)
+    return srv
 
 
 # --------------------------------------------------------------------------
@@ -435,6 +559,22 @@ class WstunnelServerRequest(BaseModel):
     sni: str = Field("www.microsoft.com", description="CN/SNI for the self-signed cert")
 
 
+class RealityServerRequest(BaseModel):
+    role: str = "entry"                    # entry | exit
+    listen_port: int = 443
+    dest: str = "dl.google.com"            # real TLS1.3+h2 origin to borrow
+    sni: Optional[str] = None              # default = dest host
+    public_host: Optional[str] = None      # public addr clients dial (link building)
+    geo_split: bool = True
+    cascade: Optional[dict] = Field(None, description="entry: {host,port,uuid,pub,sni,sid} of the exit")
+    validate_dest: bool = True             # probe dest for TLS1.3+h2 before applying
+    regen_keys: bool = False               # re-mint the REALITY keypair (breaks existing client links)
+
+
+class RealityClientRequest(BaseModel):
+    name: str
+
+
 class GeoSplitRequest(BaseModel):
     enabled: bool
 
@@ -679,6 +819,141 @@ def wstunnel_server(req: WstunnelServerRequest) -> dict:
     inside TLS/443. Idempotent (rewrites + restarts the systemd unit)."""
     manage_or_raise(["wstunnel-server", str(req.awg_port), str(req.listen_port), req.sni])
     return {"wstunnelServer": True, "listen": req.listen_port, "awgPort": req.awg_port}
+
+
+# ----- VLESS+REALITY (Xray) entry/exit -----
+def _reality_link_for(srv: dict, client_uuid: str, short_id: str, label: str) -> str:
+    host = (srv.get("public_host") or "").strip()
+    if not host or not GENLIB_OK:
+        return ""  # panel can build the link from the public IP it already knows
+    return genlib_vless_link(host, int(srv.get("listen", 443)), client_uuid,
+                             srv["public_key"], srv["sni"], short_id=short_id, label=label)
+
+
+@app.get("/v1/reality", dependencies=authed)
+def reality_status() -> dict:
+    srv = _xray_read_json(_xray_server_path(), None)
+    if not srv:
+        return {"provisioned": False}
+    clients = _xray_read_json(_xray_clients_path(), [])
+    return {
+        "provisioned": True, "role": srv.get("role"), "listen": srv.get("listen"),
+        "dest": srv.get("dest"), "sni": srv.get("sni"), "publicKey": srv.get("public_key"),
+        "publicHost": srv.get("public_host"), "geoSplit": srv.get("geo_split"),
+        "cascade": bool(srv.get("cascade")), "clientsCount": len(clients),
+        "active": xray_active(),
+    }
+
+
+@app.post("/v1/reality/server", dependencies=authed)
+def reality_provision(req: RealityServerRequest) -> dict:
+    _require_genlib()
+    if req.role not in ("entry", "exit"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="role must be entry|exit")
+    dest_host = req.dest.partition(":")[0].strip()
+    sni = (req.sni or dest_host).strip()
+    if req.validate_dest:
+        rc, out, err = run_cmd(["bash", SETTINGS.xray_script, "test-dest", dest_host], timeout=20)
+        if rc != 0:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                detail=f"dest '{dest_host}' is not REALITY-suitable (needs TLS1.3+h2): {(err or out).strip()[-200:]}")
+    prev = _xray_read_json(_xray_server_path(), None) or {}
+    if prev.get("private_key") and not req.regen_keys:
+        priv, pub = prev["private_key"], prev["public_key"]
+    else:
+        kp = xray_keygen()
+        priv, pub = kp["private"], kp["public"]
+    cascade = None
+    if req.role == "entry" and req.cascade:
+        c = req.cascade
+        for k in ("host", "uuid", "pub", "sni"):
+            if not c.get(k):
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"cascade missing '{k}'")
+        cascade = {"host": c["host"], "port": int(c.get("port", 443)), "uuid": c["uuid"],
+                   "pub": c["pub"], "sni": c["sni"], "sid": c.get("sid", "")}
+    srv = {"role": req.role, "listen": int(req.listen_port), "dest": dest_host, "sni": sni,
+           "private_key": priv, "public_key": pub, "public_host": (req.public_host or "").strip(),
+           "geo_split": bool(req.geo_split), "cascade": cascade}
+    _xray_write_json(_xray_server_path(), srv)
+    if _xray_read_json(_xray_clients_path(), None) is None:
+        _xray_write_json(_xray_clients_path(), [])
+    xray_rebuild_and_apply()
+    return {"role": req.role, "listen": srv["listen"], "dest": dest_host, "sni": sni,
+            "publicKey": pub, "publicHost": srv["public_host"],
+            "geoSplit": srv["geo_split"], "cascade": bool(cascade), "active": xray_active()}
+
+
+@app.delete("/v1/reality", dependencies=authed)
+def reality_down() -> dict:
+    try:
+        run_xray(["down"], timeout=60)
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+    for p in (_xray_server_path(), _xray_clients_path()):
+        try:
+            os.unlink(p)
+        except OSError:
+            pass
+    return {"removed": True}
+
+
+@app.get("/v1/reality/clients", dependencies=authed)
+def reality_clients_list() -> dict:
+    srv = _xray_read_json(_xray_server_path(), None) or {}
+    clients = _xray_read_json(_xray_clients_path(), [])
+    return {"clients": [
+        {"name": c["name"], "uuid": c["uuid"], "shortid": c.get("shortid", ""),
+         "link": _reality_link_for(srv, c["uuid"], c.get("shortid", ""), c["name"]) if srv else ""}
+        for c in clients
+    ]}
+
+
+@app.post("/v1/reality/clients", dependencies=authed, status_code=status.HTTP_201_CREATED)
+def reality_clients_add(req: RealityClientRequest) -> dict:
+    _require_genlib()
+    if not valid_client_name(req.name):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid client name")
+    srv = _xray_read_json(_xray_server_path(), None)
+    if not srv:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="provision the reality server first")
+    clients = _xray_read_json(_xray_clients_path(), [])
+    if any(c["name"] == req.name for c in clients):
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="client already exists")
+    cu = str(uuidlib.uuid4())
+    sid = secrets.token_hex(8)
+    clients.append({"name": req.name, "uuid": cu, "shortid": sid})
+    _xray_write_json(_xray_clients_path(), clients)
+    xray_rebuild_and_apply()
+    return {"name": req.name, "uuid": cu, "shortid": sid,
+            "link": _reality_link_for(srv, cu, sid, req.name)}
+
+
+@app.delete("/v1/reality/clients/{name}", dependencies=authed)
+def reality_clients_remove(name: str) -> dict:
+    if not valid_client_name(name):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid client name")
+    clients = _xray_read_json(_xray_clients_path(), [])
+    new = [c for c in clients if c["name"] != name]
+    if len(new) == len(clients):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="client not found")
+    _xray_write_json(_xray_clients_path(), new)
+    xray_rebuild_and_apply()
+    return {"removed": name}
+
+
+@app.get("/v1/reality/clients/{name}/link", dependencies=authed, response_class=PlainTextResponse)
+def reality_client_link(name: str) -> str:
+    if not valid_client_name(name):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid client name")
+    srv = _xray_read_json(_xray_server_path(), None)
+    clients = _xray_read_json(_xray_clients_path(), [])
+    c = next((x for x in clients if x["name"] == name), None)
+    if not srv or not c:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="client not found")
+    link = _reality_link_for(srv, c["uuid"], c.get("shortid", ""), name)
+    if not link:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="server public_host not set; rebuild the link from the panel")
+    return link
 
 
 @app.delete("/v1/exits/{cc}", dependencies=authed)

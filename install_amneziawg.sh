@@ -37,6 +37,10 @@ AWG_ROUTING_UNIT_URL="https://raw.githubusercontent.com/valujin/amneziawg-instal
 # censor fingerprints WG. Best-effort fetch (см. step5); used by 'manage add-exit
 # --transport=wstunnel' and 'manage wstunnel-server'.
 AWG_WSTUNNEL_URL="https://raw.githubusercontent.com/valujin/amneziawg-installer/${AWG_BRANCH}/awg-wstunnel.sh"
+# VLESS+REALITY (Xray) entry/exit transport: the most DPI-durable RU transport in
+# 2026 (borrows a real site's TLS). Best-effort fetch (см. step5); driven by the
+# agent's /v1/reality/* endpoints.
+AWG_XRAY_URL="https://raw.githubusercontent.com/valujin/amneziawg-installer/${AWG_BRANCH}/awg-xray.sh"
 
 # Управляющий агент (API). Опционально (--with-agent), best-effort: разворачивает
 # FastAPI-демон поверх manage_amneziawg.sh, чтобы панель управляла сервером по API.
@@ -3030,6 +3034,15 @@ step5_download_scripts() {
         log_warn "awg-wstunnel.sh недоступен на ветке ${AWG_BRANCH} — wstunnel-транспорт недоступен."
     fi
 
+    log "Скачивание awg-xray.sh (VLESS+REALITY транспорт, best-effort)..."
+    if curl -fLso "$AWG_DIR/awg-xray.sh" --max-time 60 --retry 2 "$AWG_XRAY_URL" 2>/dev/null; then
+        chmod 700 "$AWG_DIR/awg-xray.sh" 2>/dev/null || true
+        log "VLESS+REALITY-транспорт загружен (агент: /v1/reality/*)."
+    else
+        rm -f "$AWG_DIR/awg-xray.sh" 2>/dev/null || true
+        log_warn "awg-xray.sh недоступен на ветке ${AWG_BRANCH} — REALITY-транспорт недоступен."
+    fi
+
     # Управляющий агент (API) — только по запросу (--with-agent), best-effort.
     if [[ "${WITH_AGENT:-0}" == "1" ]]; then
         log "Развёртывание управляющего агента (--with-agent)..."
@@ -3046,7 +3059,7 @@ step5_download_scripts() {
         if [[ "$_ok" -eq 1 ]]; then
             mkdir -p "$_ad/awg_genlib/data"
             local _gl_ok=1 _gf
-            for _gf in __init__.py generator.py validate.py mergekeys.py presets.py \
+            for _gf in __init__.py generator.py validate.py mergekeys.py presets.py xray.py \
                        data/hostpools.json data/hostpools_tiered.json; do
                 if ! curl -fLso "$_ad/awg_genlib/$_gf" --max-time 60 --retry 2 \
                         "$AWG_AGENT_BASE_URL/awg_genlib/$_gf" 2>/dev/null; then

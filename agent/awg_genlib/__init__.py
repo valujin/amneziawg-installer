@@ -15,6 +15,13 @@ from .mergekeys import (
     merge_vpn_configs, merge_links, build_obfuscation_patch, get_client_fields,
 )
 from .presets import generate_preset, list_presets, describe_presets, PRESETS
+from .xray import (
+    build_entry_config as xray_build_entry_config,
+    build_exit_config as xray_build_exit_config,
+    vless_link as xray_vless_link,
+    DEFAULT_DESTS as XRAY_DEFAULT_DESTS,
+    DEFAULT_DEST as XRAY_DEFAULT_DEST,
+)
 
 __all__ = [
     # generation
@@ -29,4 +36,7 @@ __all__ = [
     "merge_vpn_configs", "merge_links", "build_obfuscation_patch", "get_client_fields",
     # presets
     "generate_preset", "list_presets", "describe_presets", "PRESETS",
+    # xray / VLESS+REALITY
+    "xray_build_entry_config", "xray_build_exit_config", "xray_vless_link",
+    "XRAY_DEFAULT_DESTS", "XRAY_DEFAULT_DEST",
 ]
