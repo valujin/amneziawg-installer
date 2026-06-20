@@ -182,6 +182,33 @@ CONF
     [[ "$output" == *"ip -6 route replace 2001:db8::7 dev eth0"* ]]
 }
 
+@test "loop-guard tolerates a directly-connected endpoint with no gateway (regression)" {
+    # Regression: when the exit endpoint is on a directly-connected subnet, the
+    # WAN-detection `ip route get` returns a route with NO `via`. The `grep via`
+    # then exits 1, and under `set -o pipefail`+`set -e` that aborted the whole
+    # apply (cascade never came up). This exercises the real (non-dry-run) path
+    # with mocked tools so a connected endpoint must NOT abort.
+    mk_exit_de                         # EXIT_ENDPOINT=203.0.113.7
+    mkdir -p "$TEST_DIR/bin"
+    cat > "$TEST_DIR/bin/ip" <<EOF
+#!/usr/bin/env bash
+echo "ip \$*" >> "$TEST_DIR/ip.log"
+[[ "\$1" == -4 || "\$1" == -6 ]] && shift
+# 'route get <ep>' -> a directly-connected route: a dev, but deliberately NO via.
+if [[ "\$1" == route && "\$2" == get ]]; then echo "\$3 dev eth0 src 10.0.0.1 uid 0"; fi
+exit 0
+EOF
+    for t in ipset iptables ip6tables awg systemctl; do
+        printf '#!/usr/bin/env bash\nexit 0\n' > "$TEST_DIR/bin/$t"
+    done
+    chmod +x "$TEST_DIR/bin/"*
+    unset WAN_IF WAN_GW                # force the ip-route-get auto-detection branch
+    run env PATH="$TEST_DIR/bin:$PATH" RU_SKIP_DOWNLOAD=1 "$BASH_BIN" "$SCRIPT" apply
+    [ "$status" -eq 0 ]               # before the fix: set -e abort -> non-zero
+    # loop-guard still pinned the endpoint out the detected WAN dev (no via form)
+    grep -q "ip -4 route replace 203.0.113.7 dev eth0" "$TEST_DIR/ip.log"
+}
+
 @test "tailscale transport routes via the tailscale IP and skips entry NAT" {
     cat > "$EXITS_DIR/sg.conf" <<'CONF'
 EXIT_CC=sg

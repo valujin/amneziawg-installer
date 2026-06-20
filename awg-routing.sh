@@ -185,8 +185,11 @@ setup_exit_routing() {
         wif="${WAN_IF:-}"; wgw="${WAN_GW:-}"
         if [[ -z "$wif" && "$DRY_RUN" -eq 0 ]]; then
             local r; r="$($ipc route get "$endpoint" 2>/dev/null | head -1 || true)"
-            wif="$(printf '%s' "$r" | grep -oE 'dev [^ ]+' | awk '{print $2}')"
-            wgw="$(printf '%s' "$r" | grep -oE 'via [^ ]+' | awk '{print $2}')"
+            # `|| true` is load-bearing: a directly-connected endpoint has no
+            # `via` (and could have no `dev`), so grep finds nothing and exits 1 —
+            # under `set -o pipefail`+`set -e` that would abort the whole apply.
+            wif="$(printf '%s' "$r" | grep -oE 'dev [^ ]+' | awk '{print $2}' || true)"
+            wgw="$(printf '%s' "$r" | grep -oE 'via [^ ]+' | awk '{print $2}' || true)"
         fi
         if [[ -n "$wif" && "$wif" != "$iface" ]]; then
             if [[ -n "$wgw" ]]; then
